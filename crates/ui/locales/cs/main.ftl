@@ -4930,3 +4930,6 @@ new-message-hint = Přidejte přátele a začněte přímou zprávu nebo skupinu
 new-message-no-people-found = Nikdo neodpovídá hledání.
 new-message-create = Vytvořit zprávu
 new-message-cancel = Zrušit
+
+reading-chat-reading-settings-highlight-hovered-messages = Highlight messages on hover
+reading-chat-reading-settings-tint-the-background-of-messages-under-the-pointer = Tint the background of messages under the pointer.

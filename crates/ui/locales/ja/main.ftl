@@ -4824,3 +4824,6 @@ new-message-hint = フレンドを追加して、DMまたはグループを開�
 new-message-no-people-found = 一致する相手はいません。
 new-message-create = メッセージを作成
 new-message-cancel = キャンセル
+
+reading-chat-reading-settings-highlight-hovered-messages = Highlight messages on hover
+reading-chat-reading-settings-tint-the-background-of-messages-under-the-pointer = Tint the background of messages under the pointer.

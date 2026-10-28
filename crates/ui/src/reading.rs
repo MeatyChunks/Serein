@@ -152,6 +152,15 @@ impl MessagingUi {
 			design::card_divider(ui);
 			design::switch(
 				ui,
+				"reading-chat-reading-settings-highlight-hovered-messages",
+				Some(
+					"reading-chat-reading-settings-tint-the-background-of-messages-under-the-pointer",
+				),
+				&mut value.highlight_hovered_messages,
+			);
+			design::card_divider(ui);
+			design::switch(
+				ui,
 				"reading-double-click-reaction",
 				None,
 				&mut value.double_click_reaction_enabled,
@@ -220,6 +229,7 @@ impl MessagingUi {
 			value.animate_gifs = defaults.animate_gifs;
 			value.hide_media_links = defaults.hide_media_links;
 			value.compact_messages = defaults.compact_messages;
+			value.highlight_hovered_messages = defaults.highlight_hovered_messages;
 			value.double_click_reaction_enabled = defaults.double_click_reaction_enabled;
 			value.double_click_reaction = defaults.double_click_reaction;
 			value.confirm_external_links = defaults.confirm_external_links;
@@ -341,6 +351,7 @@ mod tests {
 			show_members: false,
 			show_members_dms: false,
 			compact_messages: true,
+			highlight_hovered_messages: false,
 			double_click_reaction_enabled: false,
 			double_click_reaction: 0,
 			animate_gifs: false,
