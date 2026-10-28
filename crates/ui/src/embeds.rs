@@ -544,11 +544,12 @@ pub fn show(
 	cache: &mut FormatCache,
 	images: &mut Avatars,
 	opening: &mut Option<String>,
-	download: &mut DownloadUi,
 	profile: &mut crate::profiles::ProfileSession,
 	state: &client_core::State,
 	card_surface: crate::design::MessageCardSurface,
 	hide_media_links: bool,
+	components: &mut crate::components::Components,
+	media_ui: &mut crate::components::MediaUi<'_>,
 ) -> Option<Gif> {
 	if message.embeds_suppressed {
 		return None;
@@ -577,7 +578,7 @@ pub fn show(
 		);
 		ui.push_id(("embed", index), |ui| {
 			if count > 1 && inline_image(embed).is_some() {
-				gallery(ui, group, images, message.id, download, demo);
+				gallery(ui, group, images, message.id, media_ui.download, demo);
 				if let Some(url) = &source_url {
 					link(
 						ui,
@@ -615,7 +616,7 @@ pub fn show(
 						crate::i18n::translate("embeds-show-open-image"),
 					)
 				});
-				embed_context_menu(&response, image, download, demo);
+				embed_context_menu(&response, image, media_ui.download, demo);
 				let star = gif.map(|gif| {
 					let favorite = state.is_gif_favorite(&gif);
 					let star =
@@ -632,7 +633,7 @@ pub fn show(
 						.on_hover_text(crate::i18n::translate("embeds-show-open-image-2"))
 						.clicked()
 				{
-					download.view_embed(message.id, image);
+					media_ui.download.view_embed(message.id, image);
 				}
 				if let Some(url) = &source_url {
 					link(
@@ -728,11 +729,24 @@ pub fn show(
 										image,
 										egui::vec2(84.0, 84.0),
 										images,
-										download,
+										media_ui.download,
 										demo,
 									);
 								}
 							});
+							if !embed.components.is_empty() {
+								components.show_embed_components(
+									ui,
+									&embed.components,
+									index,
+									message,
+									state,
+									images,
+									opening,
+									media_ui,
+									card_surface,
+								);
+							}
 							let mut field = 0;
 							while field < embed.fields.len() {
 								let columns = if ui.available_width() >= 360.0 {
@@ -781,7 +795,7 @@ pub fn show(
 								field += count;
 							}
 							if count > 1 {
-								gallery(ui, group, images, message.id, download, demo);
+								gallery(ui, group, images, message.id, media_ui.download, demo);
 							} else if let Some(image) = embed.image.as_ref().or(large) {
 								image_preview(
 									ui,
@@ -792,7 +806,7 @@ pub fn show(
 										crate::avatars::media::MEDIA_MAX_HEIGHT,
 									),
 									images,
-									download,
+									media_ui.download,
 									demo,
 								);
 							} else if let Some(clip) = clip_media(embed) {
@@ -807,22 +821,57 @@ pub fn show(
 									image,
 									egui::vec2(84.0, 84.0),
 									images,
-									download,
+									media_ui.download,
 									demo,
 								);
 							}
-							if embed.video.is_some()
-								|| matches!(embed.kind.as_str(), "video" | "gifv")
-							{
+							if let Some(video) = &embed.video {
+								let video_url = video.proxy_url.as_deref().or(video.url.as_deref());
+								if let Some(url_str) = video_url {
+									let path = url_str.split('?').next().unwrap_or(url_str);
+									let filename = path.rsplit_once('/').map(|(_, n)| n).filter(|n| !n.is_empty()).unwrap_or("video.mp4");
+									let synthetic_id = model::Id(egui::Id::unique((message.id, ("embed_video", index))).value());
+									let synthetic = model::Attachment {
+										id: synthetic_id,
+										filename: filename.to_string(),
+										description: embed.title.clone(),
+										content_type: Some("video/mp4".into()),
+										size: 1,
+										media: model::EmbedMedia {
+											url: Some(url_str.to_string()),
+											proxy_url: video.proxy_url.clone(),
+											width: if video.width > 0 { video.width } else { 480 },
+											height: if video.height > 0 { video.height } else { 270 },
+											placeholder: Vec::new(),
+										},
+										spoiler: false,
+										duration_ms: None,
+										waveform: Vec::new(),
+									};
+									let response = media_ui.video.show(ui, message, &synthetic, media_ui.download, opening, demo);
+									crate::attachments::media_context_menu(&response, &synthetic, media_ui.download, opening, demo);
+								} else {
+									ui.small(crate::i18n::translate(
+										"embeds-show-video-preview-playback-opens-in-your-browser",
+									));
+									link(
+										ui,
+										"Open video…",
+										embed.url.as_deref().or_else(|| {
+											embed.video.as_ref().and_then(|v| v.url.as_deref())
+										}),
+										opening,
+										false,
+									);
+								}
+							} else if matches!(embed.kind.as_str(), "video" | "gifv") {
 								ui.small(crate::i18n::translate(
 									"embeds-show-video-preview-playback-opens-in-your-browser",
 								));
 								link(
 									ui,
 									"Open video…",
-									embed.url.as_deref().or_else(|| {
-										embed.video.as_ref().and_then(|v| v.url.as_deref())
-									}),
+									embed.url.as_deref(),
 									opening,
 									false,
 								);
@@ -1162,11 +1211,18 @@ mod tests {
 								&mut cache,
 								&mut images,
 								&mut opening,
-								&mut DownloadUi::default(),
 								&mut crate::profiles::ProfileSession::default(),
 								&client_core::State::default(),
 								crate::design::MessageCardSurface::Conversation,
 								false,
+								&mut crate::components::Components::default(),
+								&mut crate::components::MediaUi {
+									component_viewing: &mut None,
+									viewing: &mut None,
+									download: &mut DownloadUi::default(),
+									audio: &mut crate::audio::AudioUi::default(),
+									video: &mut crate::video::VideoUi::default(),
+								},
 							);
 						},
 					)
@@ -1253,11 +1309,18 @@ mod tests {
 									&mut cache,
 									&mut images,
 									&mut opening,
-									&mut download,
 									&mut profile,
 									&client_core::State::default(),
 									crate::design::MessageCardSurface::Conversation,
 									hide_media_links,
+									&mut crate::components::Components::default(),
+									&mut crate::components::MediaUi {
+										component_viewing: &mut None,
+										viewing: &mut None,
+										download: &mut download,
+										audio: &mut crate::audio::AudioUi::default(),
+										video: &mut crate::video::VideoUi::default(),
+									},
 								)
 								.is_none()
 							);

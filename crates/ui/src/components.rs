@@ -116,6 +116,51 @@ impl Components {
 	}
 
 	#[allow(clippy::too_many_arguments)]
+	pub(crate) fn show_embed_components(
+		&mut self,
+		ui: &mut egui::Ui,
+		embed_components: &[Component],
+		embed_index: usize,
+		message: &Message,
+		state: &State,
+		avatars: &mut Avatars,
+		opening: &mut Option<String>,
+		media_ui: &mut MediaUi<'_>,
+		card_surface: design::MessageCardSurface,
+	) {
+		let identity = egui::Id::unique((
+			state.generation,
+			message.channel,
+			message.id,
+			("embed", embed_index),
+		));
+		let enabled = !message.forwarded
+			&& !state.interactions.busy()
+			&& state.gateway_connected
+			&& state.freshness == model::Freshness::Fresh
+			&& state.can_view(message.channel);
+		let mut action = None;
+		ui.push_id(identity, |ui| {
+			ui.set_max_width(ui.available_width().min(COMPONENTS_MAX_WIDTH));
+			for (index, component) in embed_components.iter().enumerate() {
+				self.show_component(
+					ui,
+					component,
+					identity.with(index),
+					message,
+					state,
+					avatars,
+					opening,
+					enabled,
+					&mut action,
+					media_ui,
+					card_surface,
+				);
+			}
+		});
+	}
+
+	#[allow(clippy::too_many_arguments)]
 	fn show_component(
 		&mut self,
 		ui: &mut egui::Ui,

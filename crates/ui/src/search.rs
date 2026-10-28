@@ -56,6 +56,8 @@ pub struct SearchUi {
 	pub opening: Option<String>,
 	pub channel_reference: Option<Id>,
 	pub channel_reference_load: Option<Id>,
+	components: crate::components::Components,
+	component_viewing: Option<(Id, u64)>,
 }
 
 impl SearchUi {
@@ -148,6 +150,7 @@ impl SearchUi {
 			self.formats.retain(|_| false);
 			self.previews.clear();
 			self.viewing = None;
+			self.component_viewing = None;
 			self.filters_open = false;
 			self.filter_draft = None;
 			if state.search.is_some() {
@@ -177,6 +180,9 @@ impl SearchUi {
 		self.previews.retain(|id, _| on_page(*id));
 		if self.viewing.is_some_and(|(message, _)| !on_page(message)) {
 			self.viewing = None;
+		}
+		if self.component_viewing.is_some_and(|(message, _)| !on_page(message)) {
+			self.component_viewing = None;
 		}
 		self.ime_frame = self.composing;
 		ctx.input(|i| {
@@ -1560,6 +1566,9 @@ impl SearchUi {
 		if preview.content != hit.excerpt {
 			preview.content.clone_from(&hit.excerpt);
 		}
+		if preview.embeds != hit.embeds {
+			preview.embeds.clone_from(&hit.embeds);
+		}
 	}
 	/// Render an individual search hit card with excerpt, author, attachments, and embeds.
 	#[allow(clippy::too_many_arguments)]
@@ -1748,11 +1757,18 @@ impl SearchUi {
 										&mut self.formats,
 										avatars,
 										&mut self.opening,
-										media.download,
 										profile,
 										state,
 										crate::design::MessageCardSurface::Opaque,
 										false,
+										&mut self.components,
+										&mut crate::components::MediaUi {
+											component_viewing: &mut self.component_viewing,
+											viewing: &mut self.viewing,
+											download: media.download,
+											audio: media.audio,
+											video: media.video,
+										},
 									) {
 									media.download.gif_favorite_request = Some(gif);
 								}

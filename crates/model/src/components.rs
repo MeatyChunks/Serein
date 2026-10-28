@@ -32,6 +32,7 @@ pub struct ComponentDefaultValue {
 #[serde(default)]
 pub struct ComponentMedia {
 	pub url: String,
+	#[serde(alias = "proxyURL", alias = "proxyUrl")]
 	pub proxy_url: Option<String>,
 	pub height: Option<u32>,
 	pub width: Option<u32>,
@@ -92,6 +93,7 @@ pub struct Component {
 	#[serde(deserialize_with = "bounded_list")]
 	pub items: Vec<ComponentMediaItem>,
 	pub sku_id: Option<Id>,
+	#[serde(alias = "accentColor")]
 	pub accent_color: Option<u32>,
 	pub divider: Option<bool>,
 	pub spacing: Option<u8>,

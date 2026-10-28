@@ -3520,11 +3520,18 @@ impl TimelineView {
 													&mut self.formatted,
 													avatars,
 													&mut self.opening,
-													&mut self.download,
 													profile,
 													state,
 													crate::design::MessageCardSurface::Conversation,
 													self.hide_media_links,
+													&mut self.components,
+													&mut crate::components::MediaUi {
+														component_viewing: &mut self.component_viewing,
+														viewing: &mut self.viewing,
+														download: &mut self.download,
+														audio: &mut self.audio,
+														video: &mut self.video,
+													},
 												) {
 													self.gif_favorite = Some(gif);
 												}
@@ -8970,7 +8977,6 @@ mod tests {
 					&mut FormatCache::default(),
 					&mut crate::avatars::Avatars::default(),
 					&mut None,
-					&mut crate::attachments::DownloadUi::default(),
 					&mut profile,
 					&State {
 						demo: true,
@@ -8978,6 +8984,14 @@ mod tests {
 					},
 					crate::design::MessageCardSurface::Conversation,
 					false,
+					&mut crate::components::Components::default(),
+					&mut crate::components::MediaUi {
+						component_viewing: &mut None,
+						viewing: &mut None,
+						download: &mut crate::attachments::DownloadUi::default(),
+						audio: &mut crate::audio::AudioUi::default(),
+						video: &mut crate::video::VideoUi::default(),
+					},
 				);
 				assert!(
 					ui.min_rect().height() > 120.0,
