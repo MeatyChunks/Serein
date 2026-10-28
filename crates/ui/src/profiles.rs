@@ -1993,11 +1993,11 @@ fn role_chips(
 		return;
 	};
 	let assigned = state.profile_role_ids(user, guild);
-	let roles: Vec<_> = roles
+	let mut roles: Vec<_> = roles
 		.iter()
-		.rev()
 		.filter(|role| role.id != guild.guild && assigned.contains(&role.id))
 		.collect();
+	roles.sort_by(|&a, &b| b.cmp_hierarchy(a));
 	let max_width = ui.available_width();
 	let widths: Vec<_> = roles
 		.iter()
