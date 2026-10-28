@@ -27,6 +27,7 @@ pub struct EmbedDto {
 #[serde(default)]
 struct MediaDto {
 	url: Option<String>,
+	#[serde(alias = "proxyURL")]
 	proxy_url: Option<String>,
 	width: u32,
 	height: u32,

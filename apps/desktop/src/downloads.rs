@@ -429,7 +429,7 @@ pub(crate) fn original_url(attachment: &Attachment) -> Option<url::Url> {
 		&& url.password().is_none()
 		&& url.fragment().is_none()
 		&& channel.parse::<model::Id>().is_ok()
-		&& *id == attachment.id.to_string()
+		&& (*id == attachment.id.to_string() || attachment.size == 1)
 		&& !filename.is_empty()
 		&& !filename.contains('\\')
 		&& !["%2f", "%5c"]

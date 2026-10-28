@@ -31,6 +31,7 @@ pub(super) fn source(
 			return Err(INVALID);
 		}
 		let client = reqwest::Client::builder()
+			.user_agent(client_core::fingerprint::user_agent())
 			.no_proxy()
 			.no_gzip()
 			.no_brotli()
@@ -133,13 +134,37 @@ impl Source {
 					.await
 					.map_err(|_| invalid())?;
 				if response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
-					let range = format!("bytes {start}-{end}/{}", self.len);
-					if response
+					let header_val = response
 						.headers()
 						.get(reqwest::header::CONTENT_RANGE)
-						.and_then(|value| value.to_str().ok())
-						!= Some(range.as_str())
-					{
+						.and_then(|value| value.to_str().ok());
+					let valid_range = if self.len == 1 {
+						if let Some(val) = header_val {
+							if let Some((prefix, total_str)) = val.rsplit_once('/') {
+								if prefix == format!("bytes {start}-{end}") {
+									if let Ok(total) = total_str.parse::<usize>() {
+										if total > 0 && total <= MAX_BYTES {
+											self.len = total;
+											true
+										} else {
+											false
+										}
+									} else {
+										false
+									}
+								} else {
+									false
+								}
+							} else {
+								false
+							}
+						} else {
+							false
+						}
+					} else {
+						header_val == Some(format!("bytes {start}-{end}/{}", self.len).as_str())
+					};
+					if !valid_range {
 						return Err(invalid());
 					}
 				} else if !(response.status() == reqwest::StatusCode::OK
