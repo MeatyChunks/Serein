@@ -886,6 +886,7 @@ pub fn show(
 								"rich"
 									| "article" | "link" | "image"
 									| "video" | "gifv" | "layoutview"
+									| "components"
 							) {
 								ui.small(crate::i18n::translate(
 									"embeds-show-additional-embed-content-is-not-supported",
