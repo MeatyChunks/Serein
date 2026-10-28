@@ -1120,13 +1120,68 @@ fn show_media(
 	card_surface: design::MessageCardSurface,
 ) {
 	let url = resolve_media(&media.url, message);
-	if let Some(attachment) = message.attachments.iter().find(|attachment| {
+	let synthetic;
+	let attachment = if let Some(attachment) = message.attachments.iter().find(|attachment| {
 		media.url.strip_prefix("attachment://") == Some(attachment.filename.as_str())
 			|| url.is_some_and(|url| {
 				attachment.media.url.as_deref() == Some(url)
 					|| attachment.media.proxy_url.as_deref() == Some(url)
 			})
 	}) {
+		Some(attachment)
+	} else if let Some(url_str) = url {
+		let path = url_str.split('?').next().unwrap_or(url_str);
+		let inferred_filename = path
+			.rsplit_once('/')
+			.map(|(_, name)| name)
+			.filter(|name| !name.is_empty())
+			.unwrap_or(if media.is_video() {
+				"media.mp4"
+			} else {
+				"media.png"
+			});
+		let synthetic_id = if let Some(tail) = path
+			.strip_prefix("https://cdn.discordapp.com/attachments/")
+			.or_else(|| path.strip_prefix("https://media.discordapp.net/attachments/"))
+		{
+			let parts: Vec<&str> = tail.split('/').collect();
+			match parts.as_slice() {
+				[_channel, id, _file] => id.parse::<model::Id>().ok(),
+				[_channel, _msg, id, _file] => id.parse::<model::Id>().ok(),
+				_ => None,
+			}
+		} else {
+			None
+		}
+		.unwrap_or_else(|| model::Id(egui::Id::unique((message.id, &media.url)).value()));
+		synthetic = model::Attachment {
+			id: synthetic_id,
+			filename: inferred_filename.to_string(),
+			description: description.map(str::to_owned),
+			content_type: media.content_type.clone().or_else(|| {
+				if media.is_video() {
+					Some("video/mp4".into())
+				} else {
+					Some("image/png".into())
+				}
+			}),
+			size: 1,
+			media: model::EmbedMedia {
+				url: Some(url_str.to_string()),
+				proxy_url: media.proxy_url.clone(),
+				width: media.width.unwrap_or(320),
+				height: media.height.unwrap_or(180),
+				placeholder: Vec::new(),
+			},
+			spoiler: false,
+			duration_ms: None,
+			waveform: Vec::new(),
+		};
+		Some(&synthetic)
+	} else {
+		None
+	};
+	if let Some(attachment) = attachment {
 		let reveal_id = egui::Id::unique((
 			"component-file-spoiler",
 			message.id,

@@ -883,7 +883,9 @@ pub fn show(
 							}
 							if !matches!(
 								embed.kind.as_str(),
-								"rich" | "article" | "link" | "image" | "video" | "gifv"
+								"rich"
+									| "article" | "link" | "image"
+									| "video" | "gifv" | "layoutview"
 							) {
 								ui.small(crate::i18n::translate(
 									"embeds-show-additional-embed-content-is-not-supported",
