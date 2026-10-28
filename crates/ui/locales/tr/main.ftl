@@ -4827,3 +4827,6 @@ new-message-hint = Bir doğrudan mesaj veya grup başlatmak için arkadaş ekley
 new-message-no-people-found = Bu aramayla eşleşen kimse yok.
 new-message-create = Mesaj Oluştur
 new-message-cancel = İptal
+
+reading-chat-reading-settings-highlight-hovered-messages = Highlight messages on hover
+reading-chat-reading-settings-tint-the-background-of-messages-under-the-pointer = Tint the background of messages under the pointer.

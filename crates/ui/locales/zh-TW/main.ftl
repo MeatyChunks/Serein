@@ -4939,3 +4939,6 @@ new-message-hint = 新增好友以開始私訊或群組。
 new-message-no-people-found = 沒有符合的結果。
 new-message-create = 建立訊息
 new-message-cancel = 取消
+
+reading-chat-reading-settings-highlight-hovered-messages = Highlight messages on hover
+reading-chat-reading-settings-tint-the-background-of-messages-under-the-pointer = Tint the background of messages under the pointer.

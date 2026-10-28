@@ -4843,3 +4843,6 @@ new-message-hint = Dodaj znajomych, aby rozpocząć wiadomość prywatną lub gr
 new-message-no-people-found = Nikt nie pasuje do tego wyszukiwania.
 new-message-create = Utwórz wiadomość
 new-message-cancel = Anuluj
+
+reading-chat-reading-settings-highlight-hovered-messages = Highlight messages on hover
+reading-chat-reading-settings-tint-the-background-of-messages-under-the-pointer = Tint the background of messages under the pointer.

@@ -51,6 +51,7 @@ pub struct TimelineView {
 	pub(super) instant_scrolling: bool,
 	applied_hide_media_links: bool,
 	pub(super) compact_messages: bool,
+	pub(super) highlight_hovered_messages: bool,
 	applied_compact_messages: bool,
 	pub(super) gif_favorite: Option<model::Gif>,
 	pub(super) invite_requests: Vec<String>,
@@ -2120,6 +2121,7 @@ impl TimelineView {
 				quick_reactions: self.quick_reactions,
 				double_click_reaction: self.double_click_reaction,
 				compact_messages: self.compact_messages,
+				highlight_hovered_messages: self.highlight_hovered_messages,
 				hide_media_links: self.hide_media_links,
 				instant_scrolling: self.instant_scrolling,
 				suppressed_deleted_highlight: std::mem::take(
@@ -3901,18 +3903,24 @@ impl TimelineView {
 						|| keyboard_focus.as_ref().is_some_and(|r| r.id == focus.id)
 						|| retained
 					{
-						ui.painter().set(
-							background,
-							egui::Shape::rect_filled(
-								rect,
-								0.0,
-								if let Some(mark) = marked {
-									crate::design::row_highlight(ui, mark, 0.16)
-								} else {
-									crate::design::row_highlight(ui, colors.hover, 0.7)
-								},
-							),
-						);
+						let paint_background = marked.is_some()
+							|| context_menu || focus.has_focus()
+							|| keyboard_focus.as_ref().is_some_and(|r| r.id == focus.id)
+							|| self.highlight_hovered_messages;
+						if paint_background {
+							ui.painter().set(
+								background,
+								egui::Shape::rect_filled(
+									rect,
+									0.0,
+									if let Some(mark) = marked {
+										crate::design::row_highlight(ui, mark, 0.16)
+									} else {
+										crate::design::row_highlight(ui, colors.hover, 0.7)
+									},
+								),
+							);
+						}
 						if let Some(rect) = time_rect {
 							let time = timestamp(id);
 							ui.painter().text(

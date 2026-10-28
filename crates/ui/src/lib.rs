@@ -5082,6 +5082,8 @@ impl MessagingUi {
 						design::paint_chat_background(ui, ui.available_rect_before_wrap());
 						self.timeline.hide_media_links = self.reading_preferences.hide_media_links;
 						self.timeline.compact_messages = self.reading_preferences.compact_messages;
+						self.timeline.highlight_hovered_messages =
+							self.reading_preferences.highlight_hovered_messages;
 						self.timeline.double_click_reaction = self
 							.reading_preferences
 							.double_click_reaction_enabled

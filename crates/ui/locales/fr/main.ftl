@@ -4841,3 +4841,6 @@ new-message-hint = Ajoutez des amis pour démarrer un message privé ou un group
 new-message-no-people-found = Personne ne correspond à cette recherche.
 new-message-create = Créer un message
 new-message-cancel = Annuler
+
+reading-chat-reading-settings-highlight-hovered-messages = Highlight messages on hover
+reading-chat-reading-settings-tint-the-background-of-messages-under-the-pointer = Tint the background of messages under the pointer.

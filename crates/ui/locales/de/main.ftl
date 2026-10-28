@@ -4841,3 +4841,6 @@ new-message-hint = Fügen Sie Freunde hinzu, um eine Direktnachricht oder eine G
 new-message-no-people-found = Niemand entspricht dieser Suche.
 new-message-create = Nachricht erstellen
 new-message-cancel = Abbrechen
+
+reading-chat-reading-settings-highlight-hovered-messages = Highlight messages on hover
+reading-chat-reading-settings-tint-the-background-of-messages-under-the-pointer = Tint the background of messages under the pointer.
