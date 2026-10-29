@@ -9,7 +9,7 @@ mod forwarding;
 mod role_names;
 pub use audio::{AudioCommand, AudioState, AudioUi};
 mod video;
-pub use video::{VideoCommand, VideoState, VideoUi};
+pub use video::{VideoCommand, VideoState, VideoUi, WebVideo};
 mod attachments;
 pub mod external_upload;
 pub use attachments::DownloadUi;
@@ -5134,9 +5134,16 @@ impl MessagingUi {
 						{
 							commands.push(command);
 						}
-						if let Some((action, text)) = self.timeline.extension_request.take() {
-							self.extensions
-								.invoke_message(action, text, state, ui.ctx());
+						if let Some((action, message_id, text)) =
+							self.timeline.extension_request.take()
+						{
+							self.extensions.invoke_message(
+								action,
+								message_id,
+								text,
+								state,
+								ui.ctx(),
+							);
 						}
 						if let Some((message, anchor, trigger)) =
 							self.timeline.reaction_picker.take()

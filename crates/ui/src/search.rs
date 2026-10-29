@@ -181,7 +181,10 @@ impl SearchUi {
 		if self.viewing.is_some_and(|(message, _)| !on_page(message)) {
 			self.viewing = None;
 		}
-		if self.component_viewing.is_some_and(|(message, _)| !on_page(message)) {
+		if self
+			.component_viewing
+			.is_some_and(|(message, _)| !on_page(message))
+		{
 			self.component_viewing = None;
 		}
 		self.ime_frame = self.composing;
@@ -1757,7 +1760,6 @@ impl SearchUi {
 										&mut self.formats,
 										avatars,
 										&mut self.opening,
-										profile,
 										state,
 										crate::design::MessageCardSurface::Opaque,
 										false,
@@ -1768,6 +1770,8 @@ impl SearchUi {
 											download: media.download,
 											audio: media.audio,
 											video: media.video,
+											profile,
+											channel_reference: &mut self.channel_reference,
 										},
 									) {
 									media.download.gif_favorite_request = Some(gif);

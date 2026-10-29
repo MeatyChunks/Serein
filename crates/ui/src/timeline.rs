@@ -40,7 +40,7 @@ pub struct TimelineView {
 	/// A private command response the reader dismissed this frame.
 	pub(super) dismiss_ephemeral: Option<Id>,
 	pub(super) extension_actions: std::sync::Arc<Vec<crate::extensions_ui::MenuAction>>,
-	pub(super) extension_request: Option<(crate::extensions_ui::MenuAction, String)>,
+	pub(super) extension_request: Option<(crate::extensions_ui::MenuAction, Id, String)>,
 	pub(super) user_action: Option<crate::user_menu::Action>,
 	pub(super) restore_pending: Option<String>,
 	/// A failed own row the reader dismissed this frame.
@@ -1384,7 +1384,7 @@ fn message_actions(
 		&Message,
 		Option<&str>,
 		&[crate::extensions_ui::MenuAction],
-		&mut Option<(crate::extensions_ui::MenuAction, String)>,
+		&mut Option<(crate::extensions_ui::MenuAction, Id, String)>,
 	),
 	actions: (bool, bool, bool, bool),
 	selection: (
@@ -1410,18 +1410,34 @@ fn message_actions(
 	popup.show(|ui| {
 		ui.set_min_width(160.0);
 		if !extension_actions.is_empty() {
-			ui.menu_button(
-				crate::i18n::translate("timeline-message-actions-extensions"),
-				|ui| {
-					for action in extension_actions {
-						if ui.button(&action.label).clicked() {
-							*extension_request =
-								Some((action.clone(), message.display_text().into_owned()));
-							ui.close();
-						}
+			if extension_actions.len() <= 3 {
+				for action in extension_actions {
+					if ui.button(&action.label).clicked() {
+						*extension_request = Some((
+							action.clone(),
+							message.id,
+							message.display_text().into_owned(),
+						));
+						ui.close();
 					}
-				},
-			);
+				}
+			} else {
+				ui.menu_button(
+					crate::i18n::translate("timeline-message-actions-extensions"),
+					|ui| {
+						for action in extension_actions {
+							if ui.button(&action.label).clicked() {
+								*extension_request = Some((
+									action.clone(),
+									message.id,
+									message.display_text().into_owned(),
+								));
+								ui.close();
+							}
+						}
+					},
+				);
+			}
 			ui.separator();
 		}
 		if crate::select::has_selection(ui.ctx())
@@ -1909,6 +1925,17 @@ fn show_system(
 }
 impl TimelineView {
 	pub(super) fn show_fullscreen_video(&mut self, ctx: &egui::Context, state: &State) -> bool {
+		if self.video.web.is_some() {
+			if !self.video.web_source_available(state) {
+				self.video.close_web();
+			} else {
+				self.video.web_source = false;
+				self.video.show_web_player(ctx, &mut self.opening);
+				if self.video.web.is_some() {
+					return true;
+				}
+			}
+		}
 		if self.video.is_fullscreen() {
 			let current = self
 				.video
@@ -1928,7 +1955,8 @@ impl TimelineView {
 						.filter(|message| {
 							state.selected == Some(*channel)
 								&& message.channel == *channel
-								&& message.attachments.contains(attachment)
+								&& (message.attachments.contains(attachment)
+									|| crate::video::is_embedded(attachment))
 								&& (self.component_viewing
 									== Some((
 										message.id,
@@ -2330,7 +2358,8 @@ impl TimelineView {
 					}) + crate::attachments::estimated_height(
 						&m.attachments,
 						(width - 88.0).max(1.0),
-					) + 58.0 + 18.0 * lines.min(128.0);
+					) + crate::embeds::component_estimated_height(&m.components)
+						+ 58.0 + 18.0 * lines.min(128.0);
 					if self.compact_messages || grouped(prior, m, self.unread_boundary) {
 						estimate = (estimate - GROUPED_ROW_SAVINGS).max(24.0);
 					}
@@ -3520,20 +3549,28 @@ impl TimelineView {
 													&mut self.formatted,
 													avatars,
 													&mut self.opening,
-													profile,
 													state,
 													crate::design::MessageCardSurface::Conversation,
 													self.hide_media_links,
 													&mut self.components,
 													&mut crate::components::MediaUi {
-														component_viewing: &mut self.component_viewing,
+														component_viewing: &mut self
+															.component_viewing,
 														viewing: &mut self.viewing,
 														download: &mut self.download,
 														audio: &mut self.audio,
 														video: &mut self.video,
+														profile,
+														channel_reference: &mut self
+															.channel_reference,
 													},
 												) {
 													self.gif_favorite = Some(gif);
+												}
+												if let Some(action) =
+													self.components.pending_action.take()
+												{
+													self.component_action = Some(action);
 												}
 												surface.exclude(egui::Rect::from_min_max(
 													egui::pos2(ui.max_rect().left(), embed_top),
@@ -3579,6 +3616,9 @@ impl TimelineView {
 															download: &mut self.download,
 															audio: &mut self.audio,
 															video: &mut self.video,
+															profile,
+															channel_reference: &mut self
+																.channel_reference,
 														},
 													)
 												});
@@ -3594,8 +3634,14 @@ impl TimelineView {
 													"timeline-show-with-scroll-application-interaction-pending",
 												));
 											}
-											if !message.components.is_empty()
-												&& let Some(error) = state.interactions.error
+											if (!message.components.is_empty()
+												|| message
+													.embeds
+													.iter()
+													.any(|e| !e.components.is_empty())) && let Some(
+												error,
+											) =
+												state.interactions.error
 											{
 												ui.colored_label(colors.danger, error);
 											}
@@ -3666,6 +3712,11 @@ impl TimelineView {
 													self.poll_action = Some((message.id, action));
 												}
 											}
+											let has_components = !message.components.is_empty()
+												|| message
+													.embeds
+													.iter()
+													.any(|e| !e.components.is_empty());
 											let unknown_system = message.unsupported
 												&& message.system_summary().is_none();
 											if unknown_system
@@ -3678,7 +3729,7 @@ impl TimelineView {
 												.extra_content
 												.components
 												|| message.extra_content.components_v2)
-												&& message.components.is_empty())
+												&& !has_components)
 											{
 												if unknown_system {
 													ui.label(
@@ -3705,7 +3756,7 @@ impl TimelineView {
 													(
 														(message.extra_content.components
 															|| message.extra_content.components_v2)
-															&& message.components.is_empty(),
+															&& !has_components,
 														"Components · Preview unavailable",
 													),
 												] {
@@ -8971,13 +9022,13 @@ mod tests {
 			},
 			|ui| {
 				let mut profile = crate::profiles::ProfileSession::default();
+				let mut channel_reference = None;
 				let _ = super::super::embeds::show(
 					ui,
 					&message,
 					&mut FormatCache::default(),
 					&mut crate::avatars::Avatars::default(),
 					&mut None,
-					&mut profile,
 					&State {
 						demo: true,
 						..Default::default()
@@ -8991,6 +9042,8 @@ mod tests {
 						download: &mut crate::attachments::DownloadUi::default(),
 						audio: &mut crate::audio::AudioUi::default(),
 						video: &mut crate::video::VideoUi::default(),
+						profile: &mut profile,
+						channel_reference: &mut channel_reference,
 					},
 				);
 				assert!(
