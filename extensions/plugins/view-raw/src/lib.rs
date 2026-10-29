@@ -213,89 +213,55 @@ fn handle(input: AppInvocation) -> AppOutput {
 	let json = serde_json::to_string_pretty(&raw).unwrap_or_else(|_| "{}".into());
 	let panel_json = truncate_utf8(&json, MAX_PANEL_JSON_BYTES);
 
-	let mut panel = vec![Element::Heading {
-		text: match target_id {
-			Some(id) => format!("View Raw · Message {id}"),
-			None => "View Raw".into(),
+	let mut panel = vec![
+		Element::Heading {
+			text: "Message Content".into(),
 		},
-	}];
-
-	let summary = match matched {
-		Some(msg) => format!(
-			"Author: {} ({}) · Channel: {} · Type: {} · Edited: {}\nAttachments: {} · Embeds: {}{} · Stickers: {} · Reactions: {}",
-			msg.author.name,
-			msg.author.id,
-			channel_id.unwrap_or("unknown"),
-			detail.map_or_else(|| "unknown".into(), |d| d.kind.to_string()),
-			if msg.edited { "yes" } else { "no" },
-			detail.map_or(usize::from(msg.attachment_count), |d| d.attachments.len()),
-			rich_item.map_or(0, |r| r.embeds.len()),
-			if rich_item.is_some_and(|r| r.embeds_suppressed) {
-				" (suppressed)"
+		Element::Text {
+			text: if content.is_empty() {
+				"(empty message content)".into()
 			} else {
-				""
+				truncate_utf8(content, 4096)
 			},
-			rich_item.map_or(0, |r| r.stickers.len()),
-			detail
-				.and_then(|d| d.reactions.as_ref())
-				.map_or(0, Vec::len),
-		),
-		None => format!(
-			"Channel: {} · Showing selected message text (full timeline metadata not in current window).",
-			channel_id.unwrap_or("unknown")
-		),
-	};
-	panel.push(Element::Text { text: summary });
+		},
+		Element::Separator,
+		Element::Heading {
+			text: "Message Data".into(),
+		},
+		Element::Text { text: panel_json },
+		Element::Separator,
+		Element::Row {
+			children: vec![
+				Element::Button {
+					id: "copy-json".into(),
+					label: "Copy Message Data".into(),
+				},
+				Element::Button {
+					id: "copy-content".into(),
+					label: "Copy Raw Content".into(),
+				},
+			],
+		},
+	];
 
 	if let Some(timeline) = timeline
 		&& !timeline.messages.is_empty()
+		&& timeline.messages.len() > 1
 	{
 		let options: Vec<String> = timeline.messages.iter().rev().map(option_label).collect();
 		let selected_option = matched
 			.map(option_label)
 			.unwrap_or_else(|| options[0].clone());
-		panel.push(Element::Select {
-			id: "message-id".into(),
-			label: "Loaded message".into(),
-			options,
-			value: selected_option,
-		});
+		panel.insert(
+			0,
+			Element::Select {
+				id: "message-id".into(),
+				label: "Message".into(),
+				options,
+				value: selected_option,
+			},
+		);
 	}
-
-	panel.push(Element::Row {
-		children: vec![
-			Element::Button {
-				id: "inspect".into(),
-				label: "Inspect selected".into(),
-			},
-			Element::Button {
-				id: "copy-json".into(),
-				label: "Prepare Raw JSON".into(),
-			},
-			Element::Button {
-				id: "copy-content".into(),
-				label: "Prepare Raw Markdown".into(),
-			},
-		],
-	});
-
-	panel.push(Element::Separator);
-	panel.push(Element::Heading {
-		text: "Raw Markdown".into(),
-	});
-	panel.push(Element::Text {
-		text: if content.is_empty() {
-			"(empty message content)".into()
-		} else {
-			truncate_utf8(content, 4096)
-		},
-	});
-
-	panel.push(Element::Separator);
-	panel.push(Element::Heading {
-		text: "Raw Message Data (JSON)".into(),
-	});
-	panel.push(Element::Text { text: panel_json });
 
 	let clipboard_text = if action == "copy-content" {
 		if content.is_empty() {
@@ -478,7 +444,8 @@ mod tests {
 			})
 			.collect::<Vec<_>>()
 			.join("\n");
-		assert!(rendered.contains("View Raw · Message 500"));
+		assert!(rendered.contains("Message Content"));
+		assert!(rendered.contains("Message Data"));
 		assert!(rendered.contains("**Hello** <#20>"));
 		assert!(rendered.contains("\"filename\": \"notes.txt\""));
 		assert!(rendered.contains("\"reply_to\": \"499\""));

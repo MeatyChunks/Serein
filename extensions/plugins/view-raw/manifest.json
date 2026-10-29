@@ -27,12 +27,12 @@
     },
     {
       "id": "copy-json",
-      "label": "Copy Raw JSON",
+      "label": "Copy Message Data",
       "surface": "panel"
     },
     {
       "id": "copy-content",
-      "label": "Copy Raw Markdown",
+      "label": "Copy Raw Content",
       "surface": "panel"
     }
   ]
