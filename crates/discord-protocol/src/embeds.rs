@@ -20,11 +20,14 @@ pub struct EmbedDto {
 	image: Option<MediaDto>,
 	thumbnail: Option<MediaDto>,
 	video: Option<MediaDto>,
+	#[serde(default)]
+	components: Option<model::ComponentList>,
 }
 #[derive(Deserialize, Default)]
 #[serde(default)]
 struct MediaDto {
 	url: Option<String>,
+	#[serde(alias = "proxyURL")]
 	proxy_url: Option<String>,
 	width: u32,
 	height: u32,
@@ -126,6 +129,7 @@ impl EmbedDto {
 			image: media(self.image, &mut limited),
 			thumbnail: media(self.thumbnail, &mut limited),
 			video: media(self.video, &mut limited),
+			components: self.components.map(|c| c.0).unwrap_or_default(),
 			limited,
 		};
 		while embed.bytes() > model::MAX_EMBED_BYTES && !embed.fields.is_empty() {

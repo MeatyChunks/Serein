@@ -62,6 +62,7 @@ mod uploads;
 mod video;
 mod voice;
 mod watch;
+mod web_player;
 use client_core::{
 	Command, Envelope, Event, State,
 	auth::{AuthState, Failure, SessionSecret},
@@ -973,6 +974,7 @@ struct Desktop {
 	downloads: downloads::Downloads,
 	audio: audio::Audio,
 	video: video::Video,
+	web_player: web_player::WebPlayer,
 	/// Synthetic stream/camera textures the demo view borrows by id.
 	_demo_textures: Vec<egui::TextureHandle>,
 	/// Offline fixture flags start (and optionally pause) the demo attachment without input.
@@ -2301,6 +2303,7 @@ impl Desktop {
 			downloads: downloads::Downloads::default(),
 			audio: audio::Audio::default(),
 			video: video::Video::default(),
+			web_player: web_player::WebPlayer::default(),
 			_demo_textures: demo_textures,
 			demo_video_autoplay: if std::env::args().any(|arg| arg == "--demo-video-paused") {
 				Some(true)
@@ -5504,6 +5507,8 @@ impl eframe::App for Desktop {
 			self.messaging.audio().stop();
 			self.video.stop();
 			self.messaging.video().stop();
+			self.web_player.close();
+			self.messaging.video().web = None;
 		}
 		self.video.poll(self.messaging.video(), ctx);
 		let audio = self.audio.poll();
@@ -5988,6 +5993,15 @@ impl eframe::App for Desktop {
 					ui::AudioCommand::Stop => self.audio.stop(),
 				}
 			}
+			self.web_player.sync(
+				self.messaging.video(),
+				&self.window,
+				&ctx,
+				!self.confirming_close
+					&& !self.confirming_logout
+					&& (self.state.demo || self.state.auth == AuthState::Authenticated),
+				self.fixture_only || self.state.demo,
+			);
 			let player = self.messaging.video();
 			if self.state.demo
 				&& let Some(pause) = self.demo_video_autoplay

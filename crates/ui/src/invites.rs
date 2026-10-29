@@ -44,13 +44,12 @@ pub(super) fn input_code(raw: &str) -> Option<String> {
 		code(raw)
 	}
 }
-fn codes(message: &Message) -> Vec<String> {
-	if message.embeds_suppressed || message.content.contains("||") {
-		return Vec::new();
+fn collect_text_codes(text: &str, found: &mut Vec<String>) {
+	if text.is_empty() || text.contains("||") || found.len() >= 3 {
+		return;
 	}
-	let mut found = Vec::new();
 	let mut in_code = false;
-	for event in pulldown_cmark::Parser::new(&message.content) {
+	for event in pulldown_cmark::Parser::new(text) {
 		use pulldown_cmark::{Event, Tag, TagEnd};
 		match event {
 			Event::Start(Tag::CodeBlock(_)) => in_code = true,
@@ -85,6 +84,38 @@ fn codes(message: &Message) -> Vec<String> {
 		if found.len() == 3 {
 			break;
 		}
+	}
+}
+
+fn collect_component_codes(components: &[model::Component], found: &mut Vec<String>) {
+	for component in components {
+		if found.len() >= 3 {
+			return;
+		}
+		if component.spoiler {
+			continue;
+		}
+		if component.kind == 10
+			&& let Some(content) = &component.content
+		{
+			collect_text_codes(content, found);
+		}
+		collect_component_codes(&component.components, found);
+		if let Some(accessory) = &component.accessory {
+			collect_component_codes(std::slice::from_ref(accessory.as_ref()), found);
+		}
+	}
+}
+
+fn codes(message: &Message) -> Vec<String> {
+	if message.embeds_suppressed {
+		return Vec::new();
+	}
+	let mut found = Vec::new();
+	collect_text_codes(&message.content, &mut found);
+	collect_component_codes(&message.components, &mut found);
+	for embed in &message.embeds {
+		collect_component_codes(&embed.components, &mut found);
 	}
 	found
 }
@@ -401,5 +432,21 @@ mod tests {
 		] {
 			assert!(super::code(bad).is_none());
 		}
+		let mut message = test_support::message(1, model::Id(9));
+		message.content.clear();
+		message.embeds.push(model::Embed {
+			kind: "layoutview".into(),
+			components: vec![model::Component {
+				kind: 17,
+				components: vec![model::Component {
+					kind: 10,
+					content: Some("Join us at https://discord.gg/layout-invite!".into()),
+					..Default::default()
+				}],
+				..Default::default()
+			}],
+			..Default::default()
+		});
+		assert_eq!(super::codes(&message), vec!["layout-invite"]);
 	}
 }

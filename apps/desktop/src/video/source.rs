@@ -22,7 +22,7 @@ pub(super) fn source(
 	cancelled: Arc<AtomicBool>,
 	runtime: Handle,
 ) -> Result<Box<dyn platform::video::ReadSeek>, &'static str> {
-	if expected == 0 || expected > MAX_BYTES {
+	if expected > MAX_BYTES {
 		return Err("Video preview limit: 100 MiB");
 	}
 	let (input, len) = if let Some(url) = url {
@@ -31,6 +31,7 @@ pub(super) fn source(
 			return Err(INVALID);
 		}
 		let client = reqwest::Client::builder()
+			.user_agent(client_core::fingerprint::user_agent())
 			.no_proxy()
 			.no_gzip()
 			.no_brotli()
@@ -40,13 +41,21 @@ pub(super) fn source(
 			.timeout(Duration::from_secs(15))
 			.build()
 			.map_err(|_| INVALID)?;
+		let len = if expected == 0 {
+			probe(&client, &url, &cancelled, &runtime)?
+		} else {
+			expected
+		};
+		if len == 0 || len > MAX_BYTES {
+			return Err("Video preview limit: 100 MiB");
+		}
 		(
 			Input::Http {
 				client,
 				url,
 				runtime,
 			},
-			expected,
+			len,
 		)
 	} else {
 		#[cfg(not(feature = "demo"))]
@@ -67,6 +76,45 @@ pub(super) fn source(
 		position: 0,
 		cache: VecDeque::new(),
 	}))
+}
+
+/// Reads the total length of a size-less embed video from a one-byte range response.
+fn probe(
+	client: &reqwest::Client,
+	url: &url::Url,
+	cancelled: &AtomicBool,
+	runtime: &Handle,
+) -> Result<usize, &'static str> {
+	runtime.block_on(async {
+		let cancelled = async {
+			while !cancelled.load(Ordering::Acquire) {
+				tokio::time::sleep(Duration::from_millis(20)).await;
+			}
+		};
+		let transfer = async {
+			let response = client
+				.get(url.clone())
+				.header(reqwest::header::ACCEPT_ENCODING, "identity")
+				.header(reqwest::header::RANGE, "bytes=0-0")
+				.send()
+				.await
+				.map_err(|_| INVALID)?;
+			if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+				return Err(UNSUPPORTED);
+			}
+			response
+				.headers()
+				.get(reqwest::header::CONTENT_RANGE)
+				.and_then(|value| value.to_str().ok())
+				.and_then(|value| value.strip_prefix("bytes 0-0/"))
+				.and_then(|total| total.parse::<usize>().ok())
+				.ok_or(INVALID)
+		};
+		tokio::select! { biased;
+			_ = cancelled => Err(INVALID),
+			result = transfer => result,
+		}
+	})
 }
 
 enum Input {
@@ -133,13 +181,37 @@ impl Source {
 					.await
 					.map_err(|_| invalid())?;
 				if response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
-					let range = format!("bytes {start}-{end}/{}", self.len);
-					if response
+					let header_val = response
 						.headers()
 						.get(reqwest::header::CONTENT_RANGE)
-						.and_then(|value| value.to_str().ok())
-						!= Some(range.as_str())
-					{
+						.and_then(|value| value.to_str().ok());
+					let valid_range = if self.len == 1 {
+						if let Some(val) = header_val {
+							if let Some((prefix, total_str)) = val.rsplit_once('/') {
+								if prefix == format!("bytes {start}-{end}") {
+									if let Ok(total) = total_str.parse::<usize>() {
+										if total > 0 && total <= MAX_BYTES {
+											self.len = total;
+											true
+										} else {
+											false
+										}
+									} else {
+										false
+									}
+								} else {
+									false
+								}
+							} else {
+								false
+							}
+						} else {
+							false
+						}
+					} else {
+						header_val == Some(format!("bytes {start}-{end}/{}", self.len).as_str())
+					};
+					if !valid_range {
 						return Err(invalid());
 					}
 				} else if !(response.status() == reqwest::StatusCode::OK
@@ -227,6 +299,78 @@ impl Seek for Source {
 mod tests {
 	use super::*;
 	use std::{io::Write, net::TcpListener, sync::atomic::AtomicUsize};
+
+	#[test]
+	fn embed_probe_requires_a_bounded_range_length() {
+		let runtime = tokio::runtime::Builder::new_multi_thread()
+			.worker_threads(1)
+			.enable_all()
+			.build()
+			.unwrap();
+		for (status, range, valid) in [
+			("206 Partial Content", "bytes 0-0/8".to_owned(), true),
+			("206 Partial Content", "bytes 0-0/0".to_owned(), false),
+			(
+				"206 Partial Content",
+				format!("bytes 0-0/{}", MAX_BYTES + 1),
+				false,
+			),
+			("206 Partial Content", "bytes 1-1/8".to_owned(), false),
+			("206 Partial Content", "bytes 0-0/*".to_owned(), false),
+			("200 OK", "bytes 0-0/8".to_owned(), false),
+		] {
+			let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+			listener.set_nonblocking(true).unwrap();
+			let url = url::Url::parse(&format!(
+				"http://{}/embedded.mp4",
+				listener.local_addr().unwrap()
+			))
+			.unwrap();
+			let server = std::thread::spawn(move || {
+				let deadline = std::time::Instant::now() + Duration::from_secs(2);
+				let mut socket = loop {
+					match listener.accept() {
+						Ok((socket, _)) => break socket,
+						Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+							assert!(
+								std::time::Instant::now() < deadline,
+								"probe did not connect"
+							);
+							std::thread::sleep(Duration::from_millis(5));
+						}
+						Err(error) => panic!("{error}"),
+					}
+				};
+				// Winsock inherits the listener's nonblocking mode; headers use blocking reads.
+				socket.set_nonblocking(false).unwrap();
+				socket
+					.set_read_timeout(Some(Duration::from_secs(2)))
+					.unwrap();
+				let mut header = Vec::new();
+				while !header.ends_with(b"\r\n\r\n") {
+					assert!(header.len() < 8192);
+					let mut byte = [0];
+					socket.read_exact(&mut byte).unwrap();
+					header.push(byte[0]);
+				}
+				let header = String::from_utf8(header).unwrap().to_ascii_lowercase();
+				assert!(header.contains("range: bytes=0-0\r\n"));
+				assert!(!header.contains("authorization:") && !header.contains("cookie:"));
+				write!(socket, "HTTP/1.1 {status}\r\nContent-Range: {range}\r\nContent-Length: 1\r\nConnection: close\r\n\r\nx").unwrap();
+			});
+			let result = source(
+				Some(url),
+				0,
+				Arc::new(AtomicBool::new(false)),
+				runtime.handle().clone(),
+			);
+			assert_eq!(result.is_ok(), valid);
+			if let Ok(mut source) = result {
+				assert_eq!(source.seek(SeekFrom::End(0)).unwrap(), 8);
+			}
+			server.join().unwrap();
+		}
+	}
 
 	#[test]
 	fn alternating_tracks_reuse_buffered_ranges() {

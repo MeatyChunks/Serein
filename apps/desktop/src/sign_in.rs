@@ -95,6 +95,7 @@ impl Desktop {
 	/// saved login; switching and adding keep both so the account stays in the switcher.
 	fn end_session(&mut self, ctx: &egui::Context, intent: SessionEnd) {
 		self.captcha.close();
+		self.web_player.close();
 		self.notification_runtime.clear(&self.window);
 		self.messaging.image_share_requested = None;
 		let extension_logout = self.extensions.logout(ctx);

@@ -14,6 +14,8 @@ pub(crate) struct MediaUi<'a> {
 	pub download: &'a mut crate::attachments::DownloadUi,
 	pub audio: &'a mut crate::audio::AudioUi,
 	pub video: &'a mut crate::video::VideoUi,
+	pub profile: &'a mut crate::profiles::ProfileSession,
+	pub channel_reference: &'a mut Option<Id>,
 }
 
 #[derive(Default)]
@@ -30,6 +32,7 @@ pub(crate) struct Components {
 	formatted: markdown::FormatCache,
 	pub(crate) file_request: Option<String>,
 	files: Vec<(String, Vec<(usize, String)>)>,
+	pub(crate) pending_action: Option<Action>,
 	// True while rendering a section accessory, so media draws as a compact thumbnail.
 	accessory: bool,
 }
@@ -116,6 +119,54 @@ impl Components {
 	}
 
 	#[allow(clippy::too_many_arguments)]
+	pub(crate) fn show_embed_components(
+		&mut self,
+		ui: &mut egui::Ui,
+		embed_components: &[Component],
+		embed_index: usize,
+		message: &Message,
+		state: &State,
+		avatars: &mut Avatars,
+		opening: &mut Option<String>,
+		media_ui: &mut MediaUi<'_>,
+		card_surface: design::MessageCardSurface,
+	) {
+		let identity = egui::Id::unique((
+			state.generation,
+			message.channel,
+			message.id,
+			("embed", embed_index),
+		));
+		let enabled = !message.forwarded
+			&& !state.interactions.busy()
+			&& state.gateway_connected
+			&& state.freshness == model::Freshness::Fresh
+			&& state.can_view(message.channel);
+		let mut action = None;
+		ui.push_id(identity, |ui| {
+			ui.set_max_width(ui.available_width().min(COMPONENTS_MAX_WIDTH));
+			for (index, component) in embed_components.iter().enumerate() {
+				self.show_component(
+					ui,
+					component,
+					identity.with(index),
+					message,
+					state,
+					avatars,
+					opening,
+					enabled,
+					&mut action,
+					media_ui,
+					card_surface,
+				);
+			}
+		});
+		if action.is_some() {
+			self.pending_action = action;
+		}
+	}
+
+	#[allow(clippy::too_many_arguments)]
 	fn show_component(
 		&mut self,
 		ui: &mut egui::Ui,
@@ -141,12 +192,21 @@ impl Components {
 			if c.spoiler {
 				let revealed = self.revealed.contains(&id.value());
 				if !revealed {
-					if ui
-						.button(crate::i18n::translate(
+					let clicked = if self.accessory && c.kind == 11 {
+						spoiler_tile(
+							ui,
+							egui::Vec2::splat(THUMBNAIL_SIZE),
+							&crate::i18n::translate(
+								"components-show-component-reveal-spoiler-component",
+							),
+						)
+					} else {
+						ui.button(crate::i18n::translate(
 							"components-show-component-reveal-spoiler-component",
 						))
 						.clicked()
-					{
+					};
+					if clicked {
 						if self.revealed.len() >= 256 {
 							self.revealed.clear();
 						}
@@ -160,24 +220,18 @@ impl Components {
 					let frame = if c.kind == 17 {
 						egui::Frame::new()
 							.fill(design::opaque_card_fill(ui, colors.raised))
-							.stroke(egui::Stroke::new(
-								1.0,
-								c.accent_color
-									.map(|rgb| {
-										egui::Color32::from_rgb(
-											(rgb >> 16) as u8,
-											(rgb >> 8) as u8,
-											rgb as u8,
-										)
-									})
-									.unwrap_or(colors.border),
-							))
+							.stroke(design::message_card_stroke(ui))
 							.corner_radius(8)
-							.inner_margin(12)
+							.inner_margin(egui::Margin {
+								left: if c.accent_color.is_some() { 16 } else { 12 },
+								right: 12,
+								top: 12,
+								bottom: 12,
+							})
 					} else {
 						egui::Frame::new()
 					};
-					frame.show(ui, |ui| {
+					let shown = frame.show(ui, |ui| {
 						if c.kind != 1 {
 							// Discord separates stacked container/section children by 8px.
 							ui.spacing_mut().item_spacing.y = 8.0;
@@ -289,6 +343,19 @@ impl Components {
 							);
 						}
 					});
+					if c.kind == 17
+						&& let Some(rgb) = c.accent_color
+					{
+						let accent =
+							egui::Color32::from_rgb((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8);
+						ui.painter().line_segment(
+							[
+								shown.response.rect.left_top() + egui::vec2(2.0, 6.0),
+								shown.response.rect.left_bottom() - egui::vec2(-2.0, 6.0),
+							],
+							egui::Stroke::new(4.0, accent),
+						);
+					}
 				}
 				2 => {
 					if c.style == Some(6) {
@@ -412,10 +479,10 @@ impl Components {
 							opening,
 							&message.mentions,
 							Some(&source),
-							&mut crate::profiles::ProfileSession::default(),
+							media_ui.profile,
 							(
 								&state.channels,
-								&mut None,
+								media_ui.channel_reference,
 								&state.guilds,
 								crate::mentions::known_roles(state, message.channel),
 							),
@@ -440,40 +507,60 @@ impl Components {
 							media_ui,
 							&mut self.revealed,
 							thumbnail,
+							false,
 							card_surface,
 						);
 					}
 				}
 				12 => {
-					for (index, item) in c.items.iter().enumerate() {
-						let key = id.with(("gallery", index));
-						let revealed = self.revealed.contains(&key.value());
-						if item.spoiler && !revealed {
-							if ui
-								.button(crate::i18n::translate(
-									"components-show-component-reveal-spoiler-media",
-								))
-								.clicked()
-							{
-								if self.revealed.len() >= 256 {
-									self.revealed.clear();
+					if c.items.len() > 1
+						&& c.items.iter().all(|item| {
+							!item.media.is_video()
+								&& find_attachment(&item.media, message)
+									.is_none_or(|a| !crate::is_motion_video(&a.filename))
+						}) {
+						show_media_gallery(
+							ui,
+							&c.items,
+							id,
+							avatars,
+							state.demo,
+							message,
+							media_ui,
+							&mut self.revealed,
+						);
+					} else {
+						for (index, item) in c.items.iter().enumerate() {
+							let key = id.with(("gallery", index));
+							let revealed = self.revealed.contains(&key.value());
+							if item.spoiler && !revealed {
+								if ui
+									.button(crate::i18n::translate(
+										"components-show-component-reveal-spoiler-media",
+									))
+									.clicked()
+								{
+									if self.revealed.len() >= 256 {
+										self.revealed.clear();
+									}
+									self.revealed.insert(key.value());
 								}
-								self.revealed.insert(key.value());
+							} else {
+								show_media(
+									ui,
+									&item.media,
+									item.description.as_deref(),
+									avatars,
+									state.demo,
+									opening,
+									message,
+									media_ui,
+									&mut self.revealed,
+									false,
+									false,
+									card_surface,
+								);
 							}
-						} else {
-							show_media(
-								ui,
-								&item.media,
-								item.description.as_deref(),
-								avatars,
-								state.demo,
-								opening,
-								message,
-								media_ui,
-								&mut self.revealed,
-								false,
-								card_surface,
-							);
 						}
 					}
 				}
@@ -490,15 +577,18 @@ impl Components {
 							media_ui,
 							&mut self.revealed,
 							false,
+							true,
 							card_surface,
 						);
 					}
 				}
 				14 => {
-					ui.add_space(if c.spacing == Some(2) { 12.0 } else { 4.0 });
+					let pad = if c.spacing == Some(2) { 8.0 } else { 4.0 };
+					ui.add_space(pad);
 					if c.divider.unwrap_or(true) {
 						ui.separator();
 					}
+					ui.add_space(pad);
 				}
 				_ => {
 					ui.colored_label(
@@ -1099,11 +1189,230 @@ fn field(
 	});
 	valid
 }
-#[allow(clippy::too_many_arguments)]
 /// Square side of a section thumbnail accessory, matching Discord's compact card art.
 const THUMBNAIL_SIZE: f32 = 80.0;
 /// Discord lays component trees out in the message content column, not across the viewport.
 const COMPONENTS_MAX_WIDTH: f32 = 520.0;
+
+fn find_attachment<'a>(
+	media: &model::ComponentMedia,
+	message: &'a Message,
+) -> Option<&'a model::Attachment> {
+	let url = resolve_media(&media.url, message);
+	message.attachments.iter().find(|attachment| {
+		media.url.strip_prefix("attachment://") == Some(attachment.filename.as_str())
+			|| url.is_some_and(|url| {
+				attachment.media.url.as_deref() == Some(url)
+					|| attachment.media.proxy_url.as_deref() == Some(url)
+			})
+	})
+}
+
+fn spoiler_tile(ui: &mut egui::Ui, size: egui::Vec2, label: &str) -> bool {
+	let colors = design::palette(ui);
+	let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+	response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
+	let painter = ui.painter().with_clip_rect(rect);
+	painter.rect_filled(rect, 6, design::opaque_card_fill(ui, colors.base));
+	painter.rect_stroke(
+		rect,
+		6,
+		design::message_card_stroke(ui),
+		egui::StrokeKind::Inside,
+	);
+	let pill_text = painter.layout_no_wrap(
+		"SPOILER".to_owned(),
+		egui::FontId::new(11.0, design::semibold_family(ui.ctx())),
+		egui::Color32::WHITE,
+	);
+	let pill = egui::Rect::from_center_size(
+		rect.center(),
+		(pill_text.size() + egui::vec2(14.0, 8.0)).min(rect.size()),
+	);
+	painter.rect_filled(
+		pill,
+		12,
+		if response.hovered() {
+			egui::Color32::from_black_alpha(220)
+		} else {
+			egui::Color32::from_black_alpha(180)
+		},
+	);
+	painter.galley(
+		pill.center() - pill_text.size() * 0.5,
+		pill_text,
+		egui::Color32::WHITE,
+	);
+	response
+		.on_hover_text(label)
+		.on_hover_cursor(egui::CursorIcon::PointingHand)
+		.clicked()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn show_media_gallery(
+	ui: &mut egui::Ui,
+	items: &[model::ComponentMediaItem],
+	id: egui::Id,
+	avatars: &mut Avatars,
+	demo: bool,
+	message: &Message,
+	media_ui: &mut MediaUi<'_>,
+	revealed: &mut std::collections::BTreeSet<u64>,
+) {
+	let width = ui
+		.available_width()
+		.clamp(1.0, crate::avatars::media::MEDIA_MAX_WIDTH);
+	let height = crate::embeds::gallery_rect(items.len(), items.len() - 1, width).bottom();
+	let (area, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+	for (index, item) in items.iter().enumerate() {
+		let rect =
+			crate::embeds::gallery_rect(items.len(), index, width).translate(area.min.to_vec2());
+		let key = id.with(("gallery", index));
+		let is_revealed = revealed.contains(&key.value());
+		ui.scope_builder(
+			egui::UiBuilder::new()
+				.id_salt(("component-gallery", index))
+				.max_rect(rect),
+			|ui| {
+				if item.spoiler && !is_revealed {
+					let label =
+						crate::i18n::translate("components-show-component-reveal-spoiler-media");
+					if spoiler_tile(ui, rect.size(), &label) {
+						if revealed.len() >= 256 {
+							revealed.clear();
+						}
+						revealed.insert(key.value());
+					}
+					return;
+				}
+				let attachment = find_attachment(&item.media, message);
+				let media = if let Some(att) = attachment {
+					att.media.clone()
+				} else {
+					model::EmbedMedia {
+						url: resolve_media(&item.media.url, message).map(str::to_owned),
+						proxy_url: item.media.proxy_url.clone(),
+						width: item.media.width.unwrap_or(640),
+						height: item.media.height.unwrap_or(360),
+						placeholder: Vec::new(),
+					}
+				};
+				let painted = avatars
+					.show_media(ui, &media, rect.size(), demo, Surface::Banner)
+					.response;
+				let response =
+					ui.interact(painted.rect, painted.id.with("media"), egui::Sense::click());
+				crate::attachments::embed_context_menu(&response, &media, media_ui.download, demo);
+				let star =
+					crate::embeds::gif_for_media(&media, media.url.as_deref(), false).map(|gif| {
+						let favorite = media_ui.download.gif_favorites.contains(&gif.url);
+						let star = crate::embeds::favorite_star(
+							ui,
+							&response,
+							favorite,
+							avatars.gifs_playing(ui.ctx()),
+						);
+						if star.clicked() {
+							media_ui.download.gif_favorite_request = Some(gif);
+						}
+						star
+					});
+				let hover = item.description.as_deref().unwrap_or("Open image");
+				response.widget_info(|| {
+					egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), hover)
+				});
+				if response.has_focus() {
+					ui.painter().rect_stroke(
+						rect,
+						5,
+						ui.visuals().selection.stroke,
+						egui::StrokeKind::Inside,
+					);
+				}
+				if !star
+					.as_ref()
+					.is_some_and(|star| star.hovered() || star.clicked())
+					&& response
+						.on_hover_text(hover)
+						.on_hover_cursor(egui::CursorIcon::PointingHand)
+						.clicked()
+				{
+					if let Some(att) = attachment {
+						*media_ui.viewing = Some((message.id, att.id));
+						*media_ui.component_viewing = Some((
+							message.id,
+							egui::Id::unique((&message.components, &message.attachments)).value(),
+						));
+					} else {
+						media_ui.download.view_embed(message.id, &media);
+					}
+				}
+			},
+		);
+	}
+}
+
+fn show_file_card(
+	ui: &mut egui::Ui,
+	media: &model::ComponentMedia,
+	description: Option<&str>,
+	opening: &mut Option<String>,
+	message: &Message,
+	card_surface: design::MessageCardSurface,
+) {
+	let colors = design::palette(ui);
+	let url = resolve_media(&media.url, message);
+	let path = url.unwrap_or(&media.url);
+	let clean = path.split(['?', '#']).next().unwrap_or(path);
+	let filename = clean
+		.rsplit_once('/')
+		.map(|(_, name)| name)
+		.filter(|name| !name.is_empty())
+		.unwrap_or("attachment");
+	let safe_url = url.and_then(markdown::external_url);
+	egui::Frame::new()
+		.fill(card_surface.fill(ui, colors.base))
+		.stroke(design::message_card_stroke(ui))
+		.corner_radius(8)
+		.inner_margin(egui::Margin::symmetric(12, 10))
+		.show(ui, |ui| {
+			ui.set_max_width(ui.available_width().min(420.0));
+			ui.horizontal(|ui| {
+				crate::icons::inline(ui, crate::icons::Icon::FileText, 24.0, colors.muted);
+				ui.vertical(|ui| {
+					if let Some(target) = &safe_url {
+						if ui
+							.add(
+								egui::Label::new(
+									egui::RichText::new(filename).strong().color(colors.link),
+								)
+								.truncate()
+								.sense(egui::Sense::click()),
+							)
+							.on_hover_cursor(egui::CursorIcon::PointingHand)
+							.on_hover_text(target)
+							.clicked()
+						{
+							*opening = Some(target.clone());
+						}
+					} else {
+						ui.add(
+							egui::Label::new(
+								egui::RichText::new(filename)
+									.strong()
+									.color(colors.text_strong),
+							)
+							.truncate(),
+						);
+					}
+					if let Some(description) = description.filter(|d| !d.is_empty()) {
+						ui.small(description);
+					}
+				});
+			});
+		});
+}
 
 #[allow(clippy::too_many_arguments)]
 fn show_media(
@@ -1117,16 +1426,10 @@ fn show_media(
 	media_ui: &mut MediaUi<'_>,
 	revealed: &mut std::collections::BTreeSet<u64>,
 	thumbnail: bool,
+	is_file: bool,
 	card_surface: design::MessageCardSurface,
 ) {
-	let url = resolve_media(&media.url, message);
-	if let Some(attachment) = message.attachments.iter().find(|attachment| {
-		media.url.strip_prefix("attachment://") == Some(attachment.filename.as_str())
-			|| url.is_some_and(|url| {
-				attachment.media.url.as_deref() == Some(url)
-					|| attachment.media.proxy_url.as_deref() == Some(url)
-			})
-	}) {
+	if let Some(attachment) = find_attachment(media, message) {
 		let reveal_id = egui::Id::unique((
 			"component-file-spoiler",
 			message.id,
@@ -1145,6 +1448,37 @@ fn show_media(
 					revealed.clear();
 				}
 				revealed.insert(reveal_id);
+			}
+			return;
+		}
+		if thumbnail {
+			let painted = avatars
+				.show_media(
+					ui,
+					&attachment.media,
+					egui::vec2(THUMBNAIL_SIZE, THUMBNAIL_SIZE),
+					demo,
+					Surface::Banner,
+				)
+				.response;
+			let response =
+				ui.interact(painted.rect, painted.id.with("thumb"), egui::Sense::click());
+			crate::attachments::media_context_menu(
+				&response,
+				attachment,
+				media_ui.download,
+				opening,
+				demo,
+			);
+			if response
+				.on_hover_cursor(egui::CursorIcon::PointingHand)
+				.clicked()
+			{
+				*media_ui.viewing = Some((message.id, attachment.id));
+				*media_ui.component_viewing = Some((
+					message.id,
+					egui::Id::unique((&message.components, &message.attachments)).value(),
+				));
 			}
 			return;
 		}
@@ -1182,48 +1516,131 @@ fn show_media(
 		}
 		return;
 	}
+	if is_file {
+		show_file_card(ui, media, description, opening, message, card_surface);
+		return;
+	}
+	let url = resolve_media(&media.url, message);
+	let video_proxy = media
+		.proxy_url
+		.as_deref()
+		.or(url)
+		.filter(|candidate| media.is_video() && crate::embeds::is_proxied_video_url(candidate));
+	if !thumbnail && let Some(proxy_str) = video_proxy {
+		let path = proxy_str.split(['?', '#']).next().unwrap_or(proxy_str);
+		let filename = path
+			.rsplit_once('/')
+			.map(|(_, name)| name)
+			.filter(|name| !name.is_empty())
+			.unwrap_or("video.mp4");
+		let original = url
+			.and_then(markdown::external_url)
+			.unwrap_or_else(|| proxy_str.to_owned());
+		let synthetic = model::Attachment {
+			id: model::Id(
+				egui::Id::unique((message.id, "component-video", proxy_str))
+					.value()
+					.max(1),
+			),
+			filename: filename.to_owned(),
+			description: description.map(str::to_owned),
+			content_type: media
+				.content_type
+				.clone()
+				.or_else(|| Some("video/mp4".into())),
+			size: 0,
+			media: model::EmbedMedia {
+				url: Some(original.clone()),
+				proxy_url: Some(proxy_str.to_owned()),
+				width: media.width.unwrap_or(480),
+				height: media.height.unwrap_or(270),
+				placeholder: Vec::new(),
+			},
+			spoiler: false,
+			duration_ms: None,
+			waveform: Vec::new(),
+		};
+		media_ui.video.show_embedded(
+			ui,
+			message,
+			&synthetic,
+			None,
+			Some(original.as_str()),
+			avatars,
+			media_ui.download,
+			opening,
+			demo,
+		);
+		if let Some(description) = description {
+			ui.small(description);
+		}
+		return;
+	}
 	let image = model::EmbedMedia {
-		url: resolve_media(&media.url, message).map(str::to_owned),
+		url: url.map(str::to_owned),
 		proxy_url: media.proxy_url.clone(),
 		width: media.width.unwrap_or(320),
 		height: media.height.unwrap_or(180),
 		..Default::default()
 	};
 	if thumbnail {
-		let response = avatars
+		let painted = avatars
 			.show_media(
 				ui,
 				&image,
 				egui::vec2(THUMBNAIL_SIZE, THUMBNAIL_SIZE),
 				demo,
-				Surface::Inline,
+				Surface::Banner,
 			)
-			.response
-			.on_hover_cursor(egui::CursorIcon::PointingHand);
-		if response.clicked() {
-			*opening = resolve_media(&media.url, message).and_then(markdown::external_url);
+			.response;
+		let response = ui.interact(painted.rect, painted.id.with("thumb"), egui::Sense::click());
+		crate::attachments::embed_context_menu(&response, &image, media_ui.download, demo);
+		if response
+			.on_hover_cursor(egui::CursorIcon::PointingHand)
+			.clicked()
+		{
+			media_ui.download.view_embed(message.id, &image);
 		}
 		return;
 	}
-	avatars.show_media(
-		ui,
-		&image,
-		egui::vec2(
-			ui.available_width()
-				.min(crate::avatars::media::MEDIA_MAX_WIDTH),
-			crate::avatars::media::MEDIA_MAX_HEIGHT,
-		),
-		demo,
-		Surface::Inline,
-	);
+	let painted = avatars
+		.show_media(
+			ui,
+			&image,
+			egui::vec2(
+				ui.available_width()
+					.min(crate::avatars::media::MEDIA_MAX_WIDTH),
+				crate::avatars::media::MEDIA_MAX_HEIGHT,
+			),
+			demo,
+			Surface::Inline,
+		)
+		.response;
+	let response = ui.interact(painted.rect, painted.id.with("media"), egui::Sense::click());
+	let hover = description.unwrap_or("Open image");
+	response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), hover));
+	crate::attachments::embed_context_menu(&response, &image, media_ui.download, demo);
+	let star = crate::embeds::gif_for_media(&image, image.url.as_deref(), false).map(|gif| {
+		let favorite = media_ui.download.gif_favorites.contains(&gif.url);
+		let star =
+			crate::embeds::favorite_star(ui, &response, favorite, avatars.gifs_playing(ui.ctx()));
+		if star.clicked() {
+			media_ui.download.gif_favorite_request = Some(gif);
+		}
+		star
+	});
+	if !star
+		.as_ref()
+		.is_some_and(|star| star.hovered() || star.clicked())
+		&& response
+			.on_hover_text(hover)
+			.on_hover_cursor(egui::CursorIcon::PointingHand)
+			.clicked()
+	{
+		media_ui.download.view_embed(message.id, &image);
+	}
 	if let Some(description) = description {
 		ui.small(description);
-	}
-	if ui
-		.small_button(crate::i18n::translate("components-show-media-open-media"))
-		.clicked()
-	{
-		*opening = resolve_media(&media.url, message).and_then(markdown::external_url);
 	}
 }
 
@@ -1270,6 +1687,142 @@ mod tests {
 		assert_eq!(
 			components[0].component.as_ref().unwrap().checked,
 			Some(false)
+		);
+	}
+
+	#[test]
+	fn layout_view_container_gallery_and_text_references_work_like_discord() {
+		let mut state = test_support::demo_state();
+		let channel = state.selected.expect("selected channel");
+		let target_channel = state
+			.channels
+			.iter()
+			.find(|c| c.id != channel && state.can_view(c.id))
+			.map(|c| c.id)
+			.unwrap_or(channel);
+		let mut message = test_support::message(1, Id(42));
+		message.channel = channel;
+		message.embeds = vec![model::Embed {
+			kind: "layoutview".into(),
+			components: vec![Component {
+				kind: 17,
+				accent_color: Some(0x5865F2),
+				components: vec![
+					Component {
+						kind: 9,
+						components: vec![Component {
+							kind: 10,
+							content: Some(format!(
+								"### Layout Heading\nJump to <#{target_channel}>"
+							)),
+							..Default::default()
+						}],
+						accessory: Some(Box::new(Component {
+							kind: 11,
+							media: Some(model::ComponentMedia {
+								url: "https://cdn.discordapp.com/attachments/1/2/thumb.png".into(),
+								width: Some(160),
+								height: Some(160),
+								..Default::default()
+							}),
+							..Default::default()
+						})),
+						..Default::default()
+					},
+					Component {
+						kind: 12,
+						items: vec![
+							model::ComponentMediaItem {
+								media: model::ComponentMedia {
+									url: "https://cdn.discordapp.com/attachments/1/2/first.png"
+										.into(),
+									width: Some(640),
+									height: Some(360),
+									..Default::default()
+								},
+								description: Some("First tile".into()),
+								spoiler: false,
+							},
+							model::ComponentMediaItem {
+								media: model::ComponentMedia {
+									url: "https://cdn.discordapp.com/attachments/1/2/second.png"
+										.into(),
+									width: Some(640),
+									height: Some(360),
+									..Default::default()
+								},
+								description: Some("Second tile".into()),
+								spoiler: false,
+							},
+						],
+						..Default::default()
+					},
+					Component {
+						kind: 1,
+						components: vec![Component {
+							kind: 2,
+							style: Some(1),
+							label: Some("Confirm".into()),
+							custom_id: Some("layout_confirm".into()),
+							..Default::default()
+						}],
+						..Default::default()
+					},
+				],
+				..Default::default()
+			}],
+			..Default::default()
+		}];
+		state.gateway_connected = true;
+		state.freshness = model::Freshness::Fresh;
+		let ctx = egui::Context::default();
+		crate::design::apply(&ctx);
+		let mut cache = markdown::FormatCache::default();
+		let mut avatars = Avatars::default();
+		let mut opening = None;
+		let mut components = Components::default();
+		let mut download = crate::attachments::DownloadUi::default();
+		let mut audio = crate::audio::AudioUi::default();
+		let mut video = crate::video::VideoUi::default();
+		let mut profile = crate::profiles::ProfileSession::default();
+		let mut channel_ref = None;
+		let mut comp_viewing = None;
+		let mut viewing = None;
+		ctx.run_ui(
+			egui::RawInput {
+				screen_rect: Some(egui::Rect::from_min_size(
+					egui::Pos2::ZERO,
+					egui::vec2(640.0, 720.0),
+				)),
+				..Default::default()
+			},
+			|ui| {
+				crate::embeds::show(
+					ui,
+					&message,
+					&mut cache,
+					&mut avatars,
+					&mut opening,
+					&state,
+					design::MessageCardSurface::Conversation,
+					false,
+					&mut components,
+					&mut MediaUi {
+						component_viewing: &mut comp_viewing,
+						viewing: &mut viewing,
+						download: &mut download,
+						audio: &mut audio,
+						video: &mut video,
+						profile: &mut profile,
+						channel_reference: &mut channel_ref,
+					},
+				);
+			},
+		)
+		.drop_without_applying_deltas();
+		assert!(
+			crate::embeds::estimated_height(&message.embeds) > 200.0,
+			"LayoutView embeds contribute component height to virtual scroll estimation"
 		);
 	}
 }
