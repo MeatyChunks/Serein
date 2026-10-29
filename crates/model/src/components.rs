@@ -32,9 +32,13 @@ pub struct ComponentDefaultValue {
 #[serde(default)]
 pub struct ComponentMedia {
 	pub url: String,
+	#[serde(alias = "proxyURL", alias = "proxyUrl")]
 	pub proxy_url: Option<String>,
 	pub height: Option<u32>,
 	pub width: Option<u32>,
+	#[serde(alias = "contentType")]
+	pub content_type: Option<String>,
+	pub placeholder: Option<String>,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(default)]
@@ -89,6 +93,7 @@ pub struct Component {
 	#[serde(deserialize_with = "bounded_list")]
 	pub items: Vec<ComponentMediaItem>,
 	pub sku_id: Option<Id>,
+	#[serde(alias = "accentColor")]
 	pub accent_color: Option<u32>,
 	pub divider: Option<bool>,
 	pub spacing: Option<u8>,
@@ -155,11 +160,34 @@ impl ComponentEmoji {
 	}
 }
 impl ComponentMedia {
+	pub fn is_video(&self) -> bool {
+		if let Some(kind) = &self.content_type {
+			let kind = kind.split(';').next().unwrap_or(kind).trim();
+			if kind
+				.get(..6)
+				.is_some_and(|prefix| prefix.eq_ignore_ascii_case("video/"))
+			{
+				return true;
+			}
+		}
+		let path = self.url.split('?').next().unwrap_or(&self.url);
+		path.rsplit_once('.').is_some_and(|(_, extension)| {
+			["mp4", "webm", "mov", "mkv", "avi", "m4v", "ogv"]
+				.iter()
+				.any(|kind| extension.eq_ignore_ascii_case(kind))
+		})
+	}
 	fn bytes(&self) -> usize {
-		self.url.capacity() + text_bytes(&self.proxy_url)
+		self.url.capacity()
+			+ text_bytes(&self.proxy_url)
+			+ text_bytes(&self.content_type)
+			+ text_bytes(&self.placeholder)
 	}
 	fn valid(&self) -> bool {
-		self.url.len() <= 4096 && bounded_text(&self.proxy_url, 4096)
+		self.url.len() <= 4096
+			&& bounded_text(&self.proxy_url, 4096)
+			&& bounded_text(&self.content_type, 128)
+			&& bounded_text(&self.placeholder, 1024)
 	}
 }
 impl Component {

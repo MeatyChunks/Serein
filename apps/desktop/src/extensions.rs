@@ -169,6 +169,10 @@ pub(crate) fn starters() -> Result<Vec<Starter>, String> {
 			include_bytes!("../../../extensions/themes/teal.serein-extension"),
 			"Cool blue-green surfaces with fresh teal accents.",
 		),
+		(
+			include_bytes!("../../../extensions/plugins/packages/view-raw.serein-extension"),
+			"Right-click a message to inspect its raw Markdown content and structured JSON metadata.",
+		),
 	];
 	packages
 		.iter()
@@ -193,13 +197,13 @@ pub(crate) fn starters() -> Result<Vec<Starter>, String> {
 #[cfg(feature = "demo")]
 pub fn demo_check_examples() -> Result<bool, String> {
 	let starters = starters()?;
-	if starters.len() != 10
+	if starters.len() != 11
 		|| starters
 			.iter()
 			.filter(|entry| entry.theme.is_some())
 			.count() != 9
 	{
-		return Err("Expected one starter plugin and nine themes".into());
+		return Err("Expected two starter plugins and nine themes".into());
 	}
 	let gate = Gate {
 		epoch: 0,
@@ -238,16 +242,26 @@ pub fn demo_check_examples() -> Result<bool, String> {
 		if manifest.kind == ExtensionKind::Plugin {
 			let ok = match manifest.id.as_str() {
 				"message-delete-protector" => summary.preserve_deleted_messages,
+				"view-raw" => !summary.preserve_deleted_messages && !summary.image_sharing,
 				_ => false,
 			};
 			if !ok {
 				return Err("Bundled plugin did not activate".into());
 			}
 			activated = true;
-			stored.grants.clear();
-			let denied = stored.summary(&gate, None, true);
-			if denied.preserve_deleted_messages || denied.image_sharing || denied.error.is_none() {
-				return Err("Plugin activation must require explicit permission".into());
+			if manifest
+				.actions
+				.iter()
+				.any(|action| action.surface == Surface::Activation)
+			{
+				stored.grants.clear();
+				let denied = stored.summary(&gate, None, true);
+				if denied.preserve_deleted_messages
+					|| denied.image_sharing
+					|| denied.error.is_none()
+				{
+					return Err("Plugin activation must require explicit permission".into());
+				}
 			}
 		} else if summary.preserve_deleted_messages
 			|| summary.image_sharing

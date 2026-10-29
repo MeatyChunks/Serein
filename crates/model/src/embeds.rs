@@ -53,6 +53,7 @@ pub struct Embed {
 	pub image: Option<EmbedMedia>,
 	pub thumbnail: Option<EmbedMedia>,
 	pub video: Option<EmbedMedia>,
+	pub components: Vec<crate::Component>,
 	pub limited: bool,
 }
 fn string_bytes(value: &Option<String>) -> usize {
@@ -107,6 +108,7 @@ impl Embed {
 				.flatten()
 				.map(EmbedMedia::bytes)
 				.sum::<usize>()
+			+ crate::components::component_bytes(&self.components)
 	}
 	fn valid(&self) -> bool {
 		self.kind.len() <= 32
@@ -129,6 +131,7 @@ impl Embed {
 			.into_iter()
 			.flatten()
 			.all(EmbedMedia::valid)
+			&& crate::components::valid_components(&self.components)
 	}
 }
 impl Embed {

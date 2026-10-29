@@ -40,6 +40,15 @@ pub enum VideoCommand {
 	Volume(f32),
 	Stop,
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WebVideo {
+	pub id: Id,
+	pub title: String,
+	pub embed_url: String,
+	pub original_url: Option<String>,
+	pub width: u32,
+	pub height: u32,
+}
 pub struct VideoUi {
 	pub active: Option<(Id, Id, Attachment)>,
 	pub state: VideoState,
@@ -48,6 +57,18 @@ pub struct VideoUi {
 	pub command: Option<VideoCommand>,
 	pub seen: bool,
 	pub volume: f32,
+	/// Active provider embed (YouTube/Vimeo) shown in a theater modal; the desktop hosts the
+	/// native child webview inside [`Self::web_bounds`].
+	pub web: Option<(Id, Id, WebVideo)>,
+	/// True when the source message for [`Self::web`] was rendered this frame; keeps the
+	/// theater player open even if the message is off-screen unless the conversation changes.
+	pub(crate) web_source: bool,
+	/// Logical client points where the desktop positions the provider webview.
+	pub web_bounds: Option<egui::Rect>,
+	/// Host status when the system webview runtime is missing or refuses the player.
+	pub web_notice: Option<String>,
+	/// External URL clicked inside the provider webview; routed to the link confirmation.
+	pub web_external: Option<String>,
 	/// Latest frame; usually the desktop's GPU-converted texture, else [`Self::managed`].
 	texture: Option<egui::load::SizedTexture>,
 	/// CPU fallback texture behind [`VideoUi::accept_frame`].
@@ -88,6 +109,11 @@ impl Default for VideoUi {
 			command: None,
 			seen: false,
 			volume: 1.0,
+			web: None,
+			web_source: false,
+			web_bounds: None,
+			web_notice: None,
+			web_external: None,
 			texture: None,
 			managed: None,
 			frame: None,
@@ -107,6 +133,10 @@ impl VideoUi {
 	pub fn stop(&mut self) {
 		self.exit_fullscreen();
 		self.active = None;
+		self.web = None;
+		self.web_source = false;
+		self.web_bounds = None;
+		self.web_notice = None;
 		self.texture = None;
 		self.managed = None;
 		self.frame = None;
@@ -115,6 +145,12 @@ impl VideoUi {
 		self.duration = 0.0;
 		self.seen = false;
 		self.command = Some(VideoCommand::Stop);
+	}
+	pub fn close_web(&mut self) {
+		self.web = None;
+		self.web_source = false;
+		self.web_bounds = None;
+		self.web_notice = None;
 	}
 	pub(super) fn exit_fullscreen(&mut self) {
 		if let Some((ctx, previous, focus)) = self.fullscreen.take() {
@@ -153,11 +189,14 @@ impl VideoUi {
 			.show(ctx, |ui| {
 				ui.set_min_size(screen.size());
 				ui.set_max_size(screen.size());
-				let response =
-					self.show_player(ui, message, attachment, true, download, opening, demo);
-				crate::attachments::media_context_menu(
-					&response, attachment, download, opening, demo,
+				let response = self.show_player(
+					ui, message, attachment, None, true, true, download, opening, demo,
 				);
+				if !is_embedded(attachment) {
+					crate::attachments::media_context_menu(
+						&response, attachment, download, opening, demo,
+					);
+				}
 			});
 		// The shared link confirmation is drawn before the timeline. Leave the video
 		// overlay when opening an original so that confirmation remains visible.
@@ -228,6 +267,7 @@ impl VideoUi {
 			VideoState::Playing => VideoCommand::Pause(true),
 			VideoState::Paused => VideoCommand::Pause(false),
 			_ => {
+				self.close_web();
 				self.active = Some((message.channel, message.id, attachment.clone()));
 				self.texture = None;
 				self.managed = None;
@@ -334,7 +374,55 @@ impl VideoUi {
 		opening: &mut Option<String>,
 		demo: bool,
 	) -> egui::Response {
-		self.show_player(ui, message, attachment, false, download, opening, demo)
+		self.show_player(
+			ui, message, attachment, None, false, true, download, opening, demo,
+		)
+	}
+	#[allow(clippy::too_many_arguments)]
+	pub(crate) fn show_embedded(
+		&mut self,
+		ui: &mut egui::Ui,
+		message: &Message,
+		attachment: &Attachment,
+		poster: Option<&model::EmbedMedia>,
+		original: Option<&str>,
+		images: &mut crate::avatars::Avatars,
+		download: &mut crate::DownloadUi,
+		opening: &mut Option<String>,
+		demo: bool,
+	) -> egui::Response {
+		let active = self.active.as_ref().is_some_and(|(channel, id, file)| {
+			*channel == message.channel && *id == message.id && file == attachment
+		});
+		let show_poster = poster.is_some()
+			&& self.texture.as_ref().filter(|_| active).is_none()
+			&& !self.posters.contains_key(&attachment.id);
+		let width = ui.available_width().clamp(1.0, MAX_WIDTH);
+		let stage = egui::Rect::from_min_size(ui.cursor().min, stage_size(attachment, width));
+		let painter = ui.painter().with_clip_rect(stage);
+		painter.rect_filled(stage, CORNER, egui::Color32::BLACK);
+		if let Some(poster) = poster.filter(|_| show_poster) {
+			ui.scope_builder(egui::UiBuilder::new().max_rect(stage), |ui| {
+				images.show_media(
+					ui,
+					poster,
+					stage.size(),
+					demo,
+					crate::avatars::Surface::Inline,
+				);
+			});
+		}
+		self.show_player(
+			ui,
+			message,
+			attachment,
+			original,
+			false,
+			!show_poster,
+			download,
+			opening,
+			demo,
+		)
 	}
 	#[allow(clippy::too_many_arguments)]
 	fn show_player(
@@ -342,7 +430,9 @@ impl VideoUi {
 		ui: &mut egui::Ui,
 		message: &Message,
 		attachment: &Attachment,
+		original: Option<&str>,
 		fullscreen: bool,
+		poster: bool,
 		download: &mut crate::DownloadUi,
 		opening: &mut Option<String>,
 		demo: bool,
@@ -371,8 +461,10 @@ impl VideoUi {
 			VideoState::Idle => "video-show-player-play",
 		});
 		let painter = ui.painter().with_clip_rect(stage);
-		painter.rect_filled(stage, CORNER, egui::Color32::BLACK);
-		if self.texture.as_ref().filter(|_| active).is_none() {
+		if poster {
+			painter.rect_filled(stage, CORNER, egui::Color32::BLACK);
+		}
+		if poster && self.texture.as_ref().filter(|_| active).is_none() {
 			if let Some((poster, _)) = self.posters.get(&attachment.id) {
 				let size = poster.size_vec2();
 				if size.x > 0.0 && size.y > 0.0 {
@@ -787,29 +879,28 @@ impl VideoUi {
 			|ui| {
 				ui.spacing_mut().item_spacing.x = 6.0;
 				let idle = !demo && !download.busy();
-				if ui
-					.add_enabled_ui(idle, |ui| {
-						crate::attachments::glass_button(
-							ui,
-							crate::icons::Icon::Download,
-							28.0,
-							"Download",
-						)
-					})
-					.inner
-					.on_disabled_hover_text(crate::i18n::translate_if_key(if demo {
-						"video-show-player-downloads-are-disabled-for-synthetic-attachments"
-					} else {
-						"video-show-player-a-download-is-already-active"
-					}))
-					.clicked()
+				if !is_embedded(attachment)
+					&& ui
+						.add_enabled_ui(idle, |ui| {
+							crate::attachments::glass_button(
+								ui,
+								crate::icons::Icon::Download,
+								28.0,
+								"Download",
+							)
+						})
+						.inner
+						.on_disabled_hover_text(crate::i18n::translate_if_key(if demo {
+							"video-show-player-downloads-are-disabled-for-synthetic-attachments"
+						} else {
+							"video-show-player-a-download-is-already-active"
+						}))
+						.clicked()
 				{
 					download.request = Some(attachment.clone());
 				}
-				if let Some(url) = attachment
-					.media
-					.url
-					.as_deref()
+				if let Some(url) = original
+					.or(attachment.media.url.as_deref())
 					.and_then(crate::markdown::external_url)
 					&& crate::attachments::glass_button(
 						ui,
@@ -839,13 +930,295 @@ impl VideoUi {
 		}
 		response
 	}
+	#[allow(clippy::too_many_arguments)]
+	pub(crate) fn show_provider(
+		&mut self,
+		ui: &mut egui::Ui,
+		message: &Message,
+		video: &WebVideo,
+		poster: Option<&model::EmbedMedia>,
+		images: &mut crate::avatars::Avatars,
+		opening: &mut Option<String>,
+		demo: bool,
+	) {
+		let colors = crate::design::palette(ui);
+		let width = ui.available_width().clamp(1.0, MAX_WIDTH);
+		let size = provider_stage(video.width, video.height, width);
+		let active = self.web.as_ref().is_some_and(|(channel, id, open)| {
+			*channel == message.channel && *id == message.id && open.id == video.id
+		});
+		if active {
+			self.web_source = true;
+			if let Some((_, _, open)) = &mut self.web {
+				*open = video.clone();
+			}
+		}
+		let rect = egui::Rect::from_min_size(ui.cursor().min, size);
+		let painter = ui.painter().with_clip_rect(rect);
+		painter.rect_filled(rect, CORNER, egui::Color32::BLACK);
+		if let Some(poster) = poster {
+			ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+				images.show_media(ui, poster, size, demo, crate::avatars::Surface::Inline);
+			});
+		}
+		let (stage, mut response) = ui.allocate_exact_size(size, egui::Sense::hover());
+		let hovered = response.hovered() || ui.rect_contains_pointer(stage);
+		let action_top = (stage.top() + 44.0).min(stage.bottom());
+		let action = ui.interact(
+			egui::Rect::from_min_max(egui::pos2(stage.left(), action_top), stage.right_bottom()),
+			response.id.with(("provider-play", video.id)),
+			egui::Sense::click(),
+		);
+		let label = if active { "Close video" } else { "Play video" };
+		action.widget_info(|| {
+			egui::WidgetInfo::labeled(
+				egui::Role::Button,
+				ui.is_enabled(),
+				format!("{label} {}", video.title),
+			)
+		});
+		let white = egui::Color32::WHITE;
+		let center = stage.center();
+		let radius = 28.0;
+		let painter = ui.painter().with_clip_rect(stage);
+		painter.circle_filled(
+			center,
+			radius,
+			if hovered {
+				egui::Color32::from_rgba_unmultiplied(0, 0, 0, 210)
+			} else {
+				egui::Color32::from_rgba_unmultiplied(0, 0, 0, 165)
+			},
+		);
+		painter.circle_stroke(
+			center,
+			radius,
+			egui::Stroke::new(1.5, egui::Color32::from_white_alpha(70)),
+		);
+		if active {
+			crate::icons::paint(
+				&painter,
+				crate::icons::Icon::Close,
+				egui::Rect::from_center_size(center, egui::Vec2::splat(22.0)),
+				white,
+			);
+		} else {
+			painter.add(egui::Shape::convex_polygon(
+				vec![
+					center + egui::vec2(-8.0, -12.0),
+					center + egui::vec2(13.0, 0.0),
+					center + egui::vec2(-8.0, 12.0),
+				],
+				white,
+				egui::Stroke::NONE,
+			));
+		}
+		let action = action
+			.on_hover_text(label)
+			.on_hover_cursor(egui::CursorIcon::PointingHand);
+		if action.clicked() {
+			if active {
+				self.close_web();
+			} else {
+				if self.active.is_some() {
+					self.stop();
+				}
+				self.web = Some((message.channel, message.id, video.clone()));
+				self.web_source = true;
+			}
+		}
+		response = action | response;
+		let overlay = egui::Rect::from_min_size(
+			egui::pos2(stage.left() + 8.0, stage.top() + 8.0),
+			egui::vec2((stage.width() - 16.0).max(0.0), 28.0),
+		);
+		ui.scope_builder(
+			egui::UiBuilder::new()
+				.max_rect(overlay)
+				.layout(egui::Layout::right_to_left(egui::Align::Min)),
+			|ui| {
+				if let Some(url) = video
+					.original_url
+					.as_deref()
+					.or(Some(video.embed_url.as_str()))
+					.and_then(crate::markdown::external_url)
+					&& crate::attachments::glass_button(
+						ui,
+						crate::icons::Icon::External,
+						28.0,
+						"Open original…",
+					)
+					.clicked()
+				{
+					*opening = Some(url);
+				}
+			},
+		);
+		if response.has_focus() {
+			ui.painter().rect_stroke(
+				stage,
+				CORNER,
+				egui::Stroke::new(2.0, colors.accent),
+				egui::StrokeKind::Inside,
+			);
+		}
+	}
+	pub(crate) fn web_source_available(&self, state: &client_core::State) -> bool {
+		let Some((channel, message, _)) = &self.web else {
+			return false;
+		};
+		state.selected == Some(*channel)
+			&& (self.web_source
+				|| state
+					.timeline
+					.get(*message)
+					.is_some_and(|item| !item.embeds.is_empty()))
+	}
+	pub(crate) fn show_web_player(&mut self, ctx: &egui::Context, opening: &mut Option<String>) {
+		if let Some(url) = self
+			.web_external
+			.take()
+			.as_deref()
+			.and_then(crate::markdown::external_url)
+		{
+			*opening = Some(url);
+		}
+		let Some((_, _, video)) = self.web.clone() else {
+			self.web_bounds = None;
+			return;
+		};
+		if opening.is_some() {
+			self.close_web();
+			return;
+		}
+		let screen = ctx.content_rect();
+		let id = egui::Id::unique("provider-video-theater");
+		let mut close = false;
+		let mut bounds = None;
+		let overlay = egui::Modal::new(id)
+			.area(
+				egui::Modal::default_area(id)
+					.anchor(egui::Align2::LEFT_TOP, egui::Vec2::ZERO)
+					.fade_in(false),
+			)
+			.backdrop_color(egui::Color32::from_black_alpha(225))
+			.frame(egui::Frame::NONE)
+			.show(ctx, |ui| {
+				let colors = crate::design::palette(ui);
+				ui.set_min_size(screen.size());
+				ui.set_max_size(screen.size());
+				let pad = egui::vec2(48.0, 56.0);
+				let avail = (screen.size() - pad * 2.0).max(egui::vec2(240.0, 160.0));
+				let aspect = if video.width > 0 && video.height > 0 {
+					(video.width as f32 / video.height as f32).clamp(0.5, 2.4)
+				} else {
+					16.0 / 9.0
+				};
+				let max_w = avail.x.min(1120.0);
+				let max_h = (avail.y - 44.0).clamp(135.0, 630.0);
+				let mut w = max_w;
+				let mut h = w / aspect;
+				if h > max_h {
+					h = max_h;
+					w = h * aspect;
+				}
+				let card = egui::Rect::from_center_size(screen.center(), egui::vec2(w, h + 44.0));
+				let header = egui::Rect::from_min_size(card.min, egui::vec2(card.width(), 40.0));
+				let stage = egui::Rect::from_min_max(
+					egui::pos2(card.left(), header.bottom() + 4.0),
+					card.max,
+				);
+				ui.painter().rect_filled(
+					header,
+					egui::CornerRadius::same(8),
+					egui::Color32::from_black_alpha(190),
+				);
+				ui.painter()
+					.rect_filled(stage, egui::CornerRadius::same(8), egui::Color32::BLACK);
+				bounds = Some(stage);
+				ui.scope_builder(
+					egui::UiBuilder::new()
+						.max_rect(header.shrink2(egui::vec2(12.0, 6.0)))
+						.layout(egui::Layout::right_to_left(egui::Align::Center)),
+					|ui| {
+						ui.spacing_mut().item_spacing.x = 8.0;
+						if crate::attachments::glass_button(
+							ui,
+							crate::icons::Icon::Close,
+							28.0,
+							"Close video (Esc)",
+						)
+						.clicked()
+						{
+							close = true;
+						}
+						if let Some(url) = video
+							.original_url
+							.as_deref()
+							.or(Some(video.embed_url.as_str()))
+							.and_then(crate::markdown::external_url)
+							&& crate::attachments::glass_button(
+								ui,
+								crate::icons::Icon::External,
+								28.0,
+								"Open original…",
+							)
+							.clicked()
+						{
+							*opening = Some(url);
+							close = true;
+						}
+						ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+							ui.add(
+								egui::Label::new(
+									egui::RichText::new(&video.title)
+										.strong()
+										.color(egui::Color32::WHITE),
+								)
+								.truncate(),
+							);
+						});
+					},
+				);
+				if let Some(notice) = &self.web_notice {
+					ui.scope_builder(
+						egui::UiBuilder::new()
+							.max_rect(stage.shrink(24.0))
+							.layout(egui::Layout::top_down(egui::Align::Center)),
+						|ui| {
+							ui.add_space((stage.height() * 0.35).max(12.0));
+							ui.label(
+								egui::RichText::new(notice)
+									.color(colors.text_strong)
+									.strong(),
+							);
+						},
+					);
+				}
+				let pointer = ui.input(|i| {
+					if i.pointer.button_clicked(egui::PointerButton::Primary) {
+						i.pointer.interact_pos()
+					} else {
+						None
+					}
+				});
+				if pointer.is_some_and(|pos| !card.contains(pos)) {
+					close = true;
+				}
+			});
+		if close || overlay.should_close() || opening.is_some() {
+			self.close_web();
+		} else {
+			self.web_bounds = bounds;
+		}
+	}
 }
 impl Drop for VideoUi {
 	fn drop(&mut self) {
 		self.exit_fullscreen();
 	}
 }
-fn stage_size(attachment: &Attachment, width: f32) -> egui::Vec2 {
+pub(crate) fn stage_size(attachment: &Attachment, width: f32) -> egui::Vec2 {
 	let width = width.clamp(1.0, MAX_WIDTH);
 	let (native_width, native_height) = if attachment.media.width > 0 && attachment.media.height > 0
 	{
@@ -861,6 +1234,24 @@ fn stage_size(attachment: &Attachment, width: f32) -> egui::Vec2 {
 		.min(1.0);
 	(egui::vec2(native_width, native_height) * scale).max(egui::vec2(1.0, 1.0))
 }
+pub(crate) fn is_embedded(attachment: &Attachment) -> bool {
+	attachment.size == 0
+}
+pub(crate) fn provider_stage(width: u32, height: u32, max_width: f32) -> egui::Vec2 {
+	let max_width = max_width.clamp(1.0, MAX_WIDTH);
+	let (native_width, native_height) = if width > 0 && height > 0 {
+		(width as f32, height as f32)
+	} else {
+		(480.0, 270.0)
+	};
+	let scale = (max_width / native_width)
+		.min(MAX_HEIGHT / native_height)
+		.min(1.0);
+	(egui::vec2(native_width, native_height) * scale).max(egui::vec2(1.0, 1.0))
+}
+pub(crate) fn embed_stage_height(width: u32, height: u32, max_width: f32) -> f32 {
+	provider_stage(width, height, max_width).y
+}
 /// Stage plus the spacing after each attachment; all controls are overlays or menu actions.
 pub(super) fn estimated_height(attachment: &Attachment, width: f32) -> f32 {
 	stage_size(attachment, width.clamp(1.0, MAX_WIDTH)).y + 6.0
@@ -873,6 +1264,157 @@ fn timestamp(seconds: f64) -> String {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[test]
+	fn provider_stage_opens_and_closes_without_starting_native_decoder() {
+		let ctx = egui::Context::default();
+		crate::design::apply(&ctx);
+		let message = test_support::message(1, Id(2));
+		let provider = WebVideo {
+			id: Id(77),
+			title: "Synthetic Demo".into(),
+			embed_url:
+				"https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?autoplay=1&playsinline=1&rel=0"
+					.into(),
+			original_url: Some("https://www.youtube.com/watch?v=dQw4w9WgXcQ".into()),
+			width: 1280,
+			height: 720,
+		};
+		let mut video = VideoUi::default();
+		let mut images = crate::avatars::Avatars::default();
+		let mut opening = None;
+		let run = |video: &mut VideoUi,
+		           images: &mut crate::avatars::Avatars,
+		           opening: &mut Option<String>,
+		           events: Vec<egui::Event>| {
+			ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(900.0, 700.0),
+					)),
+					events,
+					..Default::default()
+				},
+				|ui| {
+					ui.set_width(420.0);
+					video.show_provider(ui, &message, &provider, None, images, opening, false);
+				},
+			)
+			.drop_without_applying_deltas();
+		};
+		run(&mut video, &mut images, &mut opening, Vec::new());
+		assert!(video.web.is_none() && video.command.is_none());
+		for key in [egui::Key::Tab, egui::Key::Enter] {
+			run(
+				&mut video,
+				&mut images,
+				&mut opening,
+				vec![egui::Event::Key {
+					key,
+					physical_key: None,
+					pressed: true,
+					repeat: false,
+					modifiers: egui::Modifiers::NONE,
+				}],
+			);
+		}
+		assert_eq!(
+			video.web.as_ref().map(|(_, _, v)| v),
+			Some(&provider),
+			"activating the provider stage opens the theater player without starting native decoding"
+		);
+		assert!(video.active.is_none() && video.command.is_none());
+	}
+	#[test]
+	fn provider_theater_owns_the_surface_and_revalidates_its_source() {
+		let ctx = egui::Context::default();
+		crate::design::apply(&ctx);
+		let mut state = test_support::demo_state();
+		let channel = state.selected.expect("selected channel");
+		let message_id = Id(999_001);
+		let mut message = test_support::message(message_id.0, channel);
+		message.embeds.push(model::Embed {
+			kind: "video".into(),
+			title: Some("Synthetic Demo".into()),
+			url: Some("https://www.youtube.com/watch?v=dQw4w9WgXcQ".into()),
+			video: Some(model::EmbedMedia {
+				url: Some("https://www.youtube.com/embed/dQw4w9WgXcQ".into()),
+				width: 1280,
+				height: 720,
+				..Default::default()
+			}),
+			..Default::default()
+		});
+		let mut video = VideoUi::default();
+		let provider = crate::embeds::provider_video(&message.embeds[0]).expect("provider video");
+		video.web = Some((channel, message_id, provider));
+		video.web_source = true;
+		assert!(video.web_source_available(&state));
+		let mut opening = None;
+		ctx.run_ui(
+			egui::RawInput {
+				screen_rect: Some(egui::Rect::from_min_size(
+					egui::Pos2::ZERO,
+					egui::vec2(960.0, 720.0),
+				)),
+				..Default::default()
+			},
+			|ui| {
+				video.show_web_player(ui.ctx(), &mut opening);
+			},
+		)
+		.drop_without_applying_deltas();
+		let bounds = video.web_bounds.expect("theater bounds");
+		assert!(bounds.width() >= 240.0 && bounds.height() >= 135.0);
+		// A message without embeds no longer authorizes the theater player once off-screen.
+		video.web_source = false;
+		assert!(!video.web_source_available(&state));
+		// While the message is rendered with a provider embed, `show_provider` refreshes `web_source`.
+		ctx.run_ui(
+			egui::RawInput {
+				screen_rect: Some(egui::Rect::from_min_size(
+					egui::Pos2::ZERO,
+					egui::vec2(960.0, 720.0),
+				)),
+				..Default::default()
+			},
+			|ui| {
+				let mut cache = crate::markdown::FormatCache::default();
+				let mut images = crate::avatars::Avatars::default();
+				let mut profile = crate::profiles::ProfileSession::default();
+				let mut download = crate::DownloadUi::default();
+				let mut audio = crate::AudioUi::default();
+				let mut components = crate::components::Components::default();
+				let mut channel_ref = None;
+				let mut media_ui = crate::components::MediaUi {
+					component_viewing: &mut None,
+					download: &mut download,
+					audio: &mut audio,
+					video: &mut video,
+					viewing: &mut None,
+					profile: &mut profile,
+					channel_reference: &mut channel_ref,
+				};
+				crate::embeds::show(
+					ui,
+					&message,
+					&mut cache,
+					&mut images,
+					&mut opening,
+					&state,
+					crate::design::MessageCardSurface::Conversation,
+					false,
+					&mut components,
+					&mut media_ui,
+				);
+			},
+		)
+		.drop_without_applying_deltas();
+		assert!(video.web_source);
+		assert!(video.web_source_available(&state));
+		state.selected = Some(Id(999_999));
+		assert!(!video.web_source_available(&state));
+	}
 	#[test]
 	fn video_controls_are_explicit_bounded_and_keyboard_operable() {
 		let mut message = test_support::message(1, Id(2));
