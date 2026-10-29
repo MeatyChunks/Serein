@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 ROOT = Path(__file__).resolve().parent
 REPOSITORY = "ViceVerse-cz/Serein"
 PACKAGE_DIRS = ("themes", "plugins/packages")
-CAPABILITIES = {"selected_message", "composer", "storage", "deleted_messages", "image_sharing", "appearance", "rich_presence", "api_proxy", "timeline", "message_details", "message_content", "clipboard_write"}
+CAPABILITIES = {"selected_message", "composer", "storage", "deleted_messages", "image_sharing", "appearance", "rich_presence", "api_proxy"}
 RESERVED = {"con", "prn", "aux", "nul"} | {f"{prefix}{n}" for prefix in ("com", "lpt") for n in range(1, 10)}
 MAX_PREVIEW = 256 * 1024
 
@@ -43,7 +43,7 @@ def validate(data):
     require(len(manifest["source"].encode()) <= 2048 and source.scheme == "https" and source.hostname and not source.username and source.password is None, "credential-free HTTPS source required")
     capabilities = manifest.get("capabilities", [])
     actions = manifest.get("actions", [])
-    require(isinstance(capabilities, list) and len(capabilities) <= 5 and len(set(capabilities)) == len(capabilities) and set(capabilities) <= CAPABILITIES, "invalid capabilities")
+    require(isinstance(capabilities, list) and len(capabilities) <= 4 and len(set(capabilities)) == len(capabilities) and set(capabilities) <= CAPABILITIES, "invalid capabilities")
     require(isinstance(actions, list) and len(actions) <= 16 and len({a["id"] for a in actions}) == len(actions), "invalid action list")
     require(sum(a["surface"] == "activation" for a in actions) <= 1, "multiple activation actions")
     if "api_proxy" in capabilities:

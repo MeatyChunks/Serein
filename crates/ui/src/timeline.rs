@@ -40,7 +40,7 @@ pub struct TimelineView {
 	/// A private command response the reader dismissed this frame.
 	pub(super) dismiss_ephemeral: Option<Id>,
 	pub(super) extension_actions: std::sync::Arc<Vec<crate::extensions_ui::MenuAction>>,
-	pub(super) extension_request: Option<(crate::extensions_ui::MenuAction, Id, String)>,
+	pub(super) extension_request: Option<(crate::extensions_ui::MenuAction, String)>,
 	pub(super) user_action: Option<crate::user_menu::Action>,
 	pub(super) restore_pending: Option<String>,
 	/// A failed own row the reader dismissed this frame.
@@ -1384,7 +1384,7 @@ fn message_actions(
 		&Message,
 		Option<&str>,
 		&[crate::extensions_ui::MenuAction],
-		&mut Option<(crate::extensions_ui::MenuAction, Id, String)>,
+		&mut Option<(crate::extensions_ui::MenuAction, String)>,
 	),
 	actions: (bool, bool, bool, bool),
 	selection: (
@@ -1410,34 +1410,18 @@ fn message_actions(
 	popup.show(|ui| {
 		ui.set_min_width(160.0);
 		if !extension_actions.is_empty() {
-			if extension_actions.len() <= 3 {
-				for action in extension_actions {
-					if ui.button(&action.label).clicked() {
-						*extension_request = Some((
-							action.clone(),
-							message.id,
-							message.display_text().into_owned(),
-						));
-						ui.close();
-					}
-				}
-			} else {
-				ui.menu_button(
-					crate::i18n::translate("timeline-message-actions-extensions"),
-					|ui| {
-						for action in extension_actions {
-							if ui.button(&action.label).clicked() {
-								*extension_request = Some((
-									action.clone(),
-									message.id,
-									message.display_text().into_owned(),
-								));
-								ui.close();
-							}
+			ui.menu_button(
+				crate::i18n::translate("timeline-message-actions-extensions"),
+				|ui| {
+					for action in extension_actions {
+						if ui.button(&action.label).clicked() {
+							*extension_request =
+								Some((action.clone(), message.display_text().into_owned()));
+							ui.close();
 						}
-					},
-				);
-			}
+					}
+				},
+			);
 			ui.separator();
 		}
 		if crate::select::has_selection(ui.ctx())

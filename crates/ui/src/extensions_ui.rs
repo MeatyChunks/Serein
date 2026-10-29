@@ -505,11 +505,7 @@ impl ExtensionUi {
 						.map(|action| MenuAction {
 							plugin: entry.manifest.id.clone(),
 							action: action.id.clone(),
-							label: if entry.manifest.name.eq_ignore_ascii_case(&action.label) {
-								action.label.clone()
-							} else {
-								format!("{} · {}", entry.manifest.name, action.label)
-							},
+							label: format!("{} · {}", entry.manifest.name, action.label),
 						})
 				})
 				.collect(),
@@ -936,28 +932,10 @@ impl ExtensionUi {
 	pub(crate) fn invoke_message(
 		&mut self,
 		action: MenuAction,
-		message_id: Id,
 		text: String,
 		state: &State,
 		ctx: &egui::Context,
 	) {
-		let mut values = BTreeMap::new();
-		if self
-			.entries
-			.iter()
-			.find(|entry| entry.manifest.id == action.plugin)
-			.is_some_and(|entry| {
-				entry.manifest.capabilities.iter().any(|cap| {
-					matches!(
-						cap,
-						Capability::Timeline
-							| Capability::MessageDetails
-							| Capability::MessageContent
-					)
-				})
-			}) {
-			values.insert("message-id".into(), message_id.to_string());
-		}
 		self.queue(
 			ctx,
 			ExtensionRequest::Invoke {
@@ -965,7 +943,6 @@ impl ExtensionUi {
 				invocation: Invocation {
 					action: action.action,
 					selected_message: Some(text),
-					values,
 					..Default::default()
 				},
 				context: ExtensionContext::capture(state, false),

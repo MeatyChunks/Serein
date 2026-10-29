@@ -571,27 +571,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			package.wasm.len()
 		);
 	}
-	let view_raw = rebuilt(
-		include_str!("../../../extensions/plugins/view-raw/manifest.json"),
-		&catalog_wasm_dir.join("view_raw.wasm"),
-	)?;
-	view_raw.validate()?;
-	let view_raw_out = invoke(
-		&view_raw,
-		&Invocation {
-			action: "view-raw".into(),
-			selected_message: Some("raw markdown".into()),
-			..Default::default()
-		},
-	)?;
-	assert!(
-		!view_raw_out.panel.is_empty(),
-		"view-raw/rebuilt: panel is empty"
-	);
-	println!(
-		"view-raw/rebuilt: {} Wasm bytes; message inspector panel validated",
-		view_raw.wasm.len()
-	);
 	check_message_counter(
 		"message-counter/committed",
 		&parse_package(include_bytes!(
