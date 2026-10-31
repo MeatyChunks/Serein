@@ -122,7 +122,270 @@ impl MessagingUi {
 		true
 	}
 
-	/// Effective screen-share audio level, independent of participant voice levels.
+	/// Popout detached player window for stream viewing with always-on-top pin toggle.
+	pub(super) fn show_stream_popout(&mut self, ctx: &egui::Context, state: &mut State) {
+		if !self.voice_popout_open {
+			return;
+		}
+		let watching = state
+			.voice
+			.active
+			.as_ref()
+			.filter(|c| c.phase != Phase::Failed)
+			.and_then(|c| c.watching.map(|user| (c.channel, user)));
+		let Some((channel, streamer)) = watching else {
+			self.voice_popout_open = false;
+			return;
+		};
+		let name = participant_user(state, channel, streamer)
+			.map_or_else(|| "Participant".to_owned(), |user| user.name.clone());
+		let title = format!("{name}'s screen - Popout Player");
+		let pinned = self.voice_popout_pinned;
+		let viewport_id = egui::ViewportId::from_hash_of("voice-stream-popout");
+		let mut open = self.voice_popout_open;
+
+		let level = if pinned {
+			egui::viewport::WindowLevel::AlwaysOnTop
+		} else {
+			egui::viewport::WindowLevel::Normal
+		};
+		ctx.show_viewport_immediate(
+			viewport_id,
+			egui::ViewportBuilder::default()
+				.with_title(title)
+				.with_inner_size([640.0, 390.0])
+				.with_min_inner_size([320.0, 200.0])
+				.with_window_level(level),
+			|ui, class| {
+				if class == egui::ViewportClass::EmbeddedWindow {
+					return;
+				}
+				egui::CentralPanel::default()
+					.frame(egui::Frame::NONE.fill(egui::Color32::BLACK))
+					.show(ui, |ui| {
+						let rect = ui.max_rect();
+						match &self.voice_stream_view {
+							Some(texture) => {
+								let content = fit_rect(rect, texture.size);
+								ui.put(
+									content,
+									egui::Image::from_texture((texture.id, content.size())),
+								);
+							}
+							None => {
+								ui.painter().rect_filled(rect, 0, STAGE_FILL);
+								let status = if self.voice_stream_status.is_empty() {
+									"Connecting to the stream…"
+								} else {
+									self.voice_stream_status
+								};
+								let spinner = egui::Rect::from_center_size(
+									rect.center() - egui::vec2(0.0, 18.0),
+									egui::Vec2::splat(24.0),
+								);
+								ui.put(spinner, egui::Spinner::new().color(STAGE_MUTED));
+								ui.painter().text(
+									rect.center() + egui::vec2(0.0, 18.0),
+									egui::Align2::CENTER_CENTER,
+									status,
+									egui::FontId::proportional(13.0),
+									STAGE_MUTED,
+								);
+							}
+						}
+						// Overlay header on hover: Pin toggle & Close
+						let header_rect = egui::Rect::from_min_size(
+							rect.left_top(),
+							egui::vec2(rect.width(), 44.0),
+						);
+						let reveal = chrome_reveal(ui, rect, "popout-chrome");
+						if reveal > 0.0 {
+							let mut header_ui = ui.new_child(
+								egui::UiBuilder::new()
+									.max_rect(header_rect)
+									.layout(egui::Layout::right_to_left(egui::Align::Center)),
+							);
+							header_ui.spacing_mut().item_spacing.x = 8.0;
+							header_ui.add_space(8.0);
+							let close_btn = header_ui.add(
+								egui::Button::new("")
+									.fill(egui::Color32::from_black_alpha((180.0 * reveal) as u8))
+									.corner_radius(8),
+							);
+							crate::icons::paint(
+								header_ui.painter(),
+								crate::icons::Icon::Close,
+								close_btn.rect.shrink(8.0),
+								egui::Color32::WHITE.gamma_multiply(reveal),
+							);
+							if close_btn.on_hover_text("Close popout player").clicked() {
+								open = false;
+							}
+
+							let pin_color = if pinned {
+								design::palette(ui).accent
+							} else {
+								egui::Color32::WHITE
+							};
+							let pin_btn = header_ui.add(
+								egui::Button::new("")
+									.fill(egui::Color32::from_black_alpha((180.0 * reveal) as u8))
+									.corner_radius(8),
+							);
+							crate::icons::paint(
+								header_ui.painter(),
+								crate::icons::Icon::Pin,
+								pin_btn.rect.shrink(8.0),
+								pin_color.gamma_multiply(reveal),
+							);
+							if pin_btn
+								.on_hover_text(if pinned {
+									"Unpin from top"
+								} else {
+									"Pin on top (Always on top)"
+								})
+								.clicked()
+							{
+								self.voice_popout_pinned = !pinned;
+							}
+						}
+					});
+			},
+		);
+		self.voice_popout_open = open;
+	}
+
+	/// Bottom-right in-app Picture-in-Picture floating tile when navigating away from the stream.
+	pub(super) fn show_stream_pip(&mut self, ctx: &egui::Context, state: &mut State) {
+		if self.voice_popout_open || self.voice_fullscreen.is_some() {
+			return;
+		}
+		let watching = state
+			.voice
+			.active
+			.as_ref()
+			.filter(|c| c.phase != Phase::Failed)
+			.and_then(|c| c.watching.map(|user| (c.channel, user)));
+		let Some((channel, streamer)) = watching else {
+			return;
+		};
+		// Only show PiP when the user is NOT looking at the active voice stage.
+		// If on a different channel or in DMs without call stage, show PiP.
+		let channel_selected = state.selected == Some(channel);
+		if channel_selected {
+			let is_voice_channel = state.channel(channel).is_some_and(|c| c.kind == 2);
+			if is_voice_channel && !self.voice_chat_open {
+				return;
+			}
+			if self.dm_call_stage(state).is_some() {
+				return;
+			}
+		}
+
+		let screen = ctx.content_rect();
+		let pip_size = egui::vec2(280.0, 158.0);
+		let pip_margin = egui::vec2(18.0, 18.0);
+		let pip_rect = egui::Rect::from_min_size(
+			screen.right_bottom() - pip_size - pip_margin,
+			pip_size,
+		);
+
+		egui::Area::new(egui::Id::unique("voice-stream-pip"))
+			.order(egui::Order::Foreground)
+			.fixed_pos(pip_rect.min)
+			.show(ctx, |ui| {
+				let (rect, response) = ui.allocate_exact_size(pip_size, egui::Sense::click());
+				ui.painter().rect_filled(rect, 8, STAGE_FILL);
+				ui.painter().rect_stroke(
+					rect,
+					8,
+					egui::Stroke::new(1.0, egui::Color32::from_white_alpha(35)),
+					egui::StrokeKind::Inside,
+				);
+
+				let name = participant_user(state, channel, streamer)
+					.map_or_else(|| "Participant".to_owned(), |user| user.name.clone());
+
+				if let Some(texture) = &self.voice_stream_view {
+					let content = fit_rect(rect, texture.size);
+					ui.put(
+						content,
+						egui::Image::from_texture((texture.id, content.size())).corner_radius(8),
+					);
+				} else {
+					let spinner = egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(20.0));
+					ui.put(spinner, egui::Spinner::new().color(STAGE_MUTED));
+				}
+
+				name_badge(ui, rect, &format!("{name}'s screen"), None, 1.0);
+
+				// Quick overlay controls on hover: Return to call, Popout, Stop watching
+				let hovered = response.hovered() || ui.rect_contains_pointer(rect);
+				if hovered {
+					let top_bar = egui::Rect::from_min_size(
+						rect.left_top(),
+						egui::vec2(rect.width(), 36.0),
+					);
+					let mut bar_ui = ui.new_child(
+						egui::UiBuilder::new()
+							.max_rect(top_bar)
+							.layout(egui::Layout::right_to_left(egui::Align::Center)),
+					);
+					bar_ui.spacing_mut().item_spacing.x = 4.0;
+					bar_ui.add_space(4.0);
+
+					let stop = bar_ui.add(
+						egui::Button::new("")
+							.fill(egui::Color32::from_black_alpha(180))
+							.corner_radius(6),
+					);
+					crate::icons::paint(
+						bar_ui.painter(),
+						crate::icons::Icon::Close,
+						stop.rect.shrink(7.0),
+						egui::Color32::WHITE,
+					);
+					if stop.on_hover_text("Stop watching").clicked() {
+						self.watch_request = Some(None);
+					}
+
+					let popout = bar_ui.add(
+						egui::Button::new("")
+							.fill(egui::Color32::from_black_alpha(180))
+							.corner_radius(6),
+					);
+					crate::icons::paint(
+						bar_ui.painter(),
+						crate::icons::Icon::External,
+						popout.rect.shrink(7.0),
+						egui::Color32::WHITE,
+					);
+					if popout.on_hover_text("Popout player").clicked() {
+						self.voice_popout_open = true;
+					}
+
+					let expand = bar_ui.add(
+						egui::Button::new("")
+							.fill(egui::Color32::from_black_alpha(180))
+							.corner_radius(6),
+					);
+					crate::icons::paint(
+						bar_ui.painter(),
+						crate::icons::Icon::Fullscreen,
+						expand.rect.shrink(7.0),
+						egui::Color32::WHITE,
+					);
+					if expand.on_hover_text("Return to call").clicked() {
+						if let Some(cmd) = state.select(channel) {
+							// Return to call
+							let _ = cmd;
+						}
+						self.voice_focus = Some(StageFocus::Stream(streamer));
+					}
+				}
+			});
+	}
+
 	pub fn voice_stream_volume(&self) -> u16 {
 		if self.voice_stream_muted {
 			0
@@ -3166,7 +3429,7 @@ impl MessagingUi {
 		// share/more) before anything overlaps; mute, camera and hang-up always stay.
 		let actions = 2.0 * 48.0;
 		let essential = 2.0 * 48.0 + BAR_GAP + HANG_UP;
-		let side = [watched.is_some(), focused, screen_focused]
+		let side = [watched.is_some(), watched.is_some(), focused, screen_focused]
 			.iter()
 			.filter(|shown| **shown)
 			.count() as f32
@@ -3406,6 +3669,18 @@ impl MessagingUi {
 			}
 		}
 		if watched.is_some() && side_shown {
+			let popout = control(
+				&mut view,
+				crate::icons::Icon::External,
+				40.0,
+				true,
+				STAGE_TEXT,
+				"Popout player",
+				"Open stream in a popout window",
+			);
+			if popout.clicked() {
+				self.voice_popout_open = true;
+			}
 			let volume = control(
 				&mut view,
 				crate::icons::Icon::Speaker,
