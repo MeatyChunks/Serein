@@ -84,7 +84,7 @@ impl Update {
 				ClientPlatforms::default()
 			} else {
 				match self.clients {
-					Patch::Absent => previous.map_or_default(|p| p.clients),
+					Patch::Absent => previous.map_or_else(ClientPlatforms::default, |p| p.clients),
 					Patch::Null => ClientPlatforms::default(),
 					Patch::Value(clients) => clients,
 				}
@@ -395,7 +395,7 @@ impl State {
 				row.status = presence.and_then(|p| p.status.clone());
 				row.custom_status = presence.and_then(|p| p.custom_status.clone());
 				row.activities = presence.map_or_else(Vec::new, |p| p.activities.clone());
-				row.clients = presence.map_or_default(|p| p.clients);
+				row.clients = presence.map_or_else(ClientPlatforms::default, |p| p.clients);
 			}
 		}
 	}

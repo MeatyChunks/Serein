@@ -1889,7 +1889,7 @@ impl MemberItem {
 					clients: presence
 						.as_ref()
 						.filter(|p| p.status != "offline")
-						.map_or_default(PresenceDto::clients),
+						.map_or_else(Default::default, PresenceDto::clients),
 					status: presence.and_then(|p| match p.status.as_str() {
 						"online" | "idle" | "dnd" | "offline" => Some(p.status),
 						_ => None,
