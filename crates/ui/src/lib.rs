@@ -473,6 +473,10 @@ pub struct MessagingUi {
 	voice_fullscreen: Option<(voice::StageFocus, egui::Context, bool, egui::Id)>,
 	/// Native window transition for the desktop to apply after this UI frame.
 	voice_fullscreen_request: Option<bool>,
+	/// Popout stream window open.
+	pub voice_popout_open: bool,
+	/// Popout stream window pinned (always on top).
+	pub voice_popout_pinned: bool,
 	/// Whether the other participants stay visible as a strip under the enlarged tile.
 	pub voice_focus_participants: bool,
 	/// How far the call stage's hover chrome (and tile name badges) has faded out: 0 shown.
@@ -5759,6 +5763,8 @@ impl MessagingUi {
 		if let Some(gif) = self.timeline.download.gif_favorite_request.take() {
 			state.toggle_gif_favorite(&gif);
 		}
+		self.show_stream_popout(&ctx, state);
+		self.show_stream_pip(&ctx, state);
 		commands
 	}
 }
