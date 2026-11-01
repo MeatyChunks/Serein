@@ -155,7 +155,6 @@ pub fn known_users(state: &State, channel: Id) -> Vec<User> {
 			add(user);
 		}
 	}
-
 	if let Some(members) = state.members.as_ref().filter(|m| m.channel == channel) {
 		for member in members
 			.slots
@@ -570,8 +569,17 @@ impl Menu {
 								.then_some(0)
 							})
 							.map(|r| {
+								let rank = if query.is_empty() {
+									if recency.contains_key(&user.id) {
+										0
+									} else {
+										1
+									}
+								} else {
+									r
+								};
 								(
-									(r, 0, recency.get(&user.id).copied().unwrap_or(u64::MAX)),
+									(rank, 0, recency.get(&user.id).copied().unwrap_or(u64::MAX)),
 									Candidate::User {
 										user: user.clone(),
 										name: name.to_owned(),
@@ -683,6 +691,28 @@ impl Menu {
 				Candidate::Channel {
 					id,
 					name: format!("Unknown channel ({id})"),
+				},
+			));
+		}
+		// An explicit user snowflake can be mentioned even if not in the cached member list.
+		if kind == Kind::User
+			&& let Ok(id) = query.parse::<Id>()
+			&& !users.iter().any(|u| u.id == id)
+		{
+			ranked.push((
+				(0, 0, 0),
+				Candidate::User {
+					user: User {
+						id,
+						name: format!("User ({id})"),
+						avatar: None,
+						kind: model::AccountKind::Human,
+						webhook: false,
+						discriminator: 0,
+						primary_guild: None,
+						cosmetics: None,
+					},
+					name: format!("User ({id})"),
 				},
 			));
 		}
@@ -1405,6 +1435,39 @@ mod tests {
 		assert!(
 			matches!(&commands[..], [client_core::Command::UserAction { action: client_core::user_actions::Action::Block { user, blocked: true }, .. }] if *user == target)
 		);
+	}
+
+	#[test]
+	fn explicit_raw_user_id_suggests_user_token_candidate() {
+		let state = test_support::demo_state();
+		let channel = state.selected.unwrap();
+		let mut menu = Menu::default();
+		let raw_id = 998877665544332211u64;
+		menu.refresh(&state, channel, &format!("@{raw_id}"), Some(20), &[]);
+		assert_eq!(menu.candidates.len(), 1);
+		assert_eq!(menu.candidates[0].id(), Id(raw_id));
+		assert_eq!(menu.candidates[0].token(), format!("<@{raw_id}> "));
+	}
+
+	#[test]
+	fn empty_query_prefers_active_conversation_participants() {
+		let mut state = test_support::demo_state();
+		let channel = state.selected.unwrap();
+		let member_user = user(50001, "QuietMember");
+		let active_user = user(50002, "ActiveChatter");
+		let mut message = test_support::message(50002, channel);
+		message.author = active_user.clone();
+		state.timeline.insert(message, false, false).unwrap();
+
+		let mut menu = Menu::default();
+		menu.refresh(
+			&state,
+			channel,
+			"@",
+			Some(1),
+			&[member_user.clone(), active_user.clone()],
+		);
+		assert_eq!(menu.candidates[0].id(), active_user.id);
 	}
 
 	#[test]
