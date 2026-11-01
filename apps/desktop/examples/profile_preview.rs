@@ -344,6 +344,7 @@ fn prime_channel_links(state: &mut client_core::State) {
 				tertiary_color: None,
 				position: 1,
 				hoist: false,
+				// An ordinary role the fixture can hand out; only integrations are managed.
 				managed: false,
 			},
 		}),
@@ -644,7 +645,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let args: Vec<_> = std::env::args().skip(1).collect();
 	let value = |prefix: &str| args.iter().find_map(|arg| arg.strip_prefix(prefix));
 	if !args.iter().any(|arg| arg == "--demo") {
-		return Err("Usage: profile_preview --demo [--output=PATH.png | --smoke | --interactive] [--page=stickers|slash-commands|slash-command-search|slash-command-options|profile|markdown|embeds|channel-links|channel-link-replies|profile-card|collectibles|member-tags|dm-tags|account|appearance|storage|general|chat|language|keybinds|extensions|server|server-engagement|server-safety|server-emoji|server-stickers|server-members|server-roles|server-invites|server-integrations|server-audit-log] [--command=help|weather] [--themes] [--extension=ID] [--thumbnail] [--width=1120] [--height=760] [--scroll=PIXELS] [--light] [--toasts] [--compact] [--transparency=0..100]".into());
+		return Err("Usage: profile_preview --demo [--output=PATH.png | --smoke | --interactive] [--page=stickers|slash-commands|slash-command-search|slash-command-options|profile|markdown|embeds|channel-links|channel-link-replies|profile-card|collectibles|member-tags|dm-tags|account|appearance|storage|updates|general|chat|language|notifications|keybinds|extensions|server|server-engagement|server-safety|server-emoji|server-stickers|server-members|server-roles|server-invites|server-integrations|server-audit-log] [--command=help|weather] [--themes] [--extension=ID] [--thumbnail] [--width=1120] [--height=760] [--scroll=PIXELS] [--keybinds-custom] [--light] [--toasts] [--compact] [--transparency=0..100]".into());
 	}
 	let smoke = args.iter().any(|arg| arg == "--smoke");
 	let interactive = args.iter().any(|arg| arg == "--interactive");
@@ -675,8 +676,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			| "account"
 			| "appearance"
 			| "storage"
+			| "updates"
 			| "general"
 			| "chat" | "language"
+			| "notifications"
 			| "keybinds"
 			| "extensions"
 			| "server"
@@ -694,7 +697,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			| "forum-settings"
 			| "friends"
 	) {
-		return Err("Page must be profile, markdown, embeds, channel-links, channel-link-replies, profile-card, collectibles, member-tags, dm-tags, account, appearance, storage, general, chat, language, keybinds, extensions, slash-commands, slash-command-search, slash-command-options, server, server-engagement, server-safety, server-emoji, server-stickers, server-members, server-roles, server-invites, server-integrations or server-audit-log".into());
+		return Err("Page must be profile, markdown, embeds, channel-links, channel-link-replies, profile-card, collectibles, member-tags, dm-tags, account, appearance, storage, general, chat, language, notifications, keybinds, extensions, slash-commands, slash-command-search, slash-command-options, server, server-engagement, server-safety, server-emoji, server-stickers, server-members, server-roles, server-invites, server-integrations or server-audit-log".into());
 	}
 	let slash_command = value("--command=").unwrap_or("help").to_owned();
 	if !matches!(slash_command.as_str(), "help" | "weather") {
@@ -784,7 +787,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			}
 			if page == "embeds" {
 				let channel = state.selected.expect("synthetic embed conversation");
-				let messages: Vec<model::Message> = (0..3)
+				let messages = (0..3)
 					.rev()
 					.map(|variant| {
 						let mut message = test_support::message(600 + variant, channel);
@@ -826,26 +829,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 						message
 					})
 					.collect();
-				// A link that resolves to a hosted clip carries the clip and no poster.
-				let mut clip = test_support::message(604, channel);
-				clip.content = "https://example.org/synthetic/reel/".into();
-				clip.attachments.clear();
-				clip.reactions = Some(vec![]);
-				clip.embeds = vec![model::Embed {
-					kind: "video".into(),
-					url: Some(clip.content.clone()),
-					video: Some(model::EmbedMedia {
-						url: Some("https://example.org/synthetic/reel/clip.mp4".into()),
-						width: 640,
-						height: 1136,
-						..Default::default()
-					}),
-					..Default::default()
-				}];
 				state.timeline.clear();
 				state
 					.timeline
-					.seed_cache(messages.into_iter().chain(std::iter::once(clip)).collect())
+					.seed_cache(messages)
 					.expect("valid synthetic embeds");
 			}
 			if page == "markdown" {
@@ -1188,6 +1175,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 						&page
 					},
 				);
+				if page == "keybinds" && args.iter().any(|arg| arg == "--keybinds-custom") {
+					// Synthetic rows for the extra-binding card; no saved preference is read.
+					messaging.keybinds.custom = vec![
+						model::CustomBinding {
+							action: model::KeybindAction::PushToTalk,
+							chord: model::KeyChord::new("Y", 0),
+						},
+						model::CustomBinding {
+							action: model::KeybindAction::ToggleMute,
+							chord: model::KeyChord::new("F8", 0),
+						},
+					];
+				}
 				if page == "storage" {
 					// Synthetic measurements; the demo image worker keeps no disk cache.
 					messaging.image_cache_usage = Some([

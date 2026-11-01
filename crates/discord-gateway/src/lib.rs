@@ -972,7 +972,9 @@ impl ActiveMembers {
 		if !resolved.valid() {
 			return;
 		}
-		if self.pending_presence.len() == 100 && !self.pending_presence.contains_key(&update.user) {
+		let capped =
+			self.pending_presence.len() == 100 && !self.pending_presence.contains_key(&update.user);
+		if capped && matches!(update.avatar, model::Patch::Absent) {
 			return;
 		}
 		let projected = self
@@ -987,7 +989,12 @@ impl ActiveMembers {
 							.saturating_sub(row.user.avatar.as_ref().map_or(0, String::capacity)),
 						_ => 0,
 					};
-					client_core::presence::projected_row_bytes(row, &resolved) + avatar_diff
+					let presence_bytes = if capped {
+						row.bytes()
+					} else {
+						client_core::presence::projected_row_bytes(row, &resolved)
+					};
+					presence_bytes + avatar_diff
 				}
 				model::MemberSlot::Person(row) => row.bytes(),
 				model::MemberSlot::Group(id) => id.capacity(),
@@ -1016,10 +1023,11 @@ impl ActiveMembers {
 					}
 				}
 			}
-			if row.status != resolved.status
-				|| row.custom_status != resolved.custom_status
-				|| row.activities != resolved.activities
-				|| row.clients != resolved.clients
+			if !capped
+				&& (row.status != resolved.status
+					|| row.custom_status != resolved.custom_status
+					|| row.activities != resolved.activities
+					|| row.clients != resolved.clients)
 			{
 				row.status = resolved.status.clone();
 				row.custom_status = resolved.custom_status.clone();
@@ -1034,7 +1042,10 @@ impl ActiveMembers {
 		if changed {
 			// <=100 entries within the member-row byte budget. The
 			// deadline belongs to the first change, never to the latest packet.
-			self.pending_presence.insert(update.user, resolved);
+			// Avatar changes travel in the bounded full snapshot even when this map is full.
+			if !capped {
+				self.pending_presence.insert(update.user, resolved);
+			}
 			self.presence_deadline
 				.get_or_insert(now + Duration::from_millis(100));
 		}
@@ -3311,6 +3322,105 @@ mod member_tests {
 			}
 			_ => panic!("expected Event::Members"),
 		}
+	}
+
+	#[test]
+	fn avatar_patches_survive_a_full_presence_batch_without_expanding_it() {
+		let mut list = ActiveMembers::new(MemberSubscription {
+			thread: false,
+			guild: Id(1),
+			channel: Id(2),
+			request: 7,
+			list_id: "everyone".into(),
+			ranges: vec![[0, 99], [100, 199]],
+		});
+		let people: Vec<_> = (1000..1200).map(|id| serde_json::json!({"member": {
+			"user": {"id": id.to_string(), "username": "Synthetic", "avatar": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			"presence": {"status": "online"}
+		}})).collect();
+		let wire = serde_json::to_vec(
+			&serde_json::json!({"guild_id":"1", "id":"everyone", "member_count":200,
+			"ops":[{"op":"SYNC", "range":[0,99], "items":people[..100]},
+			{"op":"SYNC", "range":[100,199], "items":people[100..]}]}),
+		)
+		.unwrap();
+		list.update(decode(&wire).unwrap()).unwrap();
+		let now = Instant::now();
+		let update = |user, avatar, status| discord_protocol::presence::PresenceUpdate {
+			guild: Some(Id(1)),
+			user: Id(user),
+			avatar,
+			status,
+			custom_status: model::Patch::Absent,
+			activities: model::Patch::Absent,
+			clients: model::Patch::Absent,
+		};
+		for user in 1000..1100 {
+			list.presence(
+				update(
+					user,
+					model::Patch::Absent,
+					model::Patch::Value("idle".into()),
+				),
+				now,
+			);
+		}
+		assert_eq!(list.pending_presence.len(), 100);
+		let deadline = list.presence_deadline;
+		let hash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+		list.presence(
+			update(
+				1100,
+				model::Patch::Value(hash.into()),
+				model::Patch::Value("dnd".into()),
+			),
+			now,
+		);
+		list.presence(update(1101, model::Patch::Null, model::Patch::Absent), now);
+		assert_eq!(list.pending_presence.len(), 100);
+		assert!(!list.pending_presence.contains_key(&Id(1100)));
+		assert_eq!(person(&list, 100).status.as_deref(), Some("online"));
+		assert_eq!(list.presence_deadline, deadline);
+		let Some(Event::Members(snapshot)) = list.take_presence() else {
+			panic!("avatar changes require a full snapshot")
+		};
+		assert_eq!(
+			person_snap(&snapshot, 100).user.avatar.as_deref(),
+			Some(hash)
+		);
+		assert!(person_snap(&snapshot, 101).user.avatar.is_none());
+		assert!(list.pending_presence.is_empty());
+		assert!(list.take_presence().is_none());
+		// A snapshot does not exempt the avatar patch from the retained-row byte budget.
+		for user in 1000..1100 {
+			list.presence(
+				update(
+					user,
+					model::Patch::Absent,
+					model::Patch::Value("dnd".into()),
+				),
+				now,
+			);
+		}
+		let used = list
+			.slots
+			.iter()
+			.flatten()
+			.map(|slot| match slot {
+				model::MemberSlot::Person(row) => row.bytes(),
+				model::MemberSlot::Group(id) => id.capacity(),
+			})
+			.sum::<usize>();
+		person_mut(&mut list, 101)
+			.user
+			.name
+			.reserve_exact(MEMBER_LIST_BYTES - used);
+		list.presence(
+			update(1101, model::Patch::Value(hash.into()), model::Patch::Absent),
+			now,
+		);
+		assert!(person(&list, 101).user.avatar.is_none());
+		assert!(!list.avatar_changed);
 	}
 
 	#[test]

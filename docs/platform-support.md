@@ -42,14 +42,6 @@ available (for example, `dx12` or `vulkan`). Affected users confirmed that forci
 DX12 launches successfully; the new default still needs native Windows validation.
 macOS and Linux retain their existing backend defaults.
 
-Adapter selection prefers a real GPU over a software rasterizer whichever backend presents it.
-Windows offers WARP ("Microsoft Basic Render Driver") as its Direct3D adapter on hardware that
-predates DX12, and drawing the client on the CPU that way freezes a machine whose GPU still
-presents through OpenGL. Windows therefore enumerates DirectX 12 and OpenGL (Vulkan stays out
-for the reason above), so both candidates exist for that ranking, and the chosen adapter is
-still printed to stderr. When only a software rasterizer is left, the client logs that fact and
-names the `WGPU_BACKEND=gl` override, which forces the OpenGL driver instead.
-
 Windows turns off winit's undecorated drop-shadow hack after the window exists, including
 after title-bar changes. egui-winit enables that hack for custom chrome. While restored it
 adds one pixel to `WM_NCCALCSIZE` top and bottom. Maximizing skips the shift, which is why
@@ -146,7 +138,12 @@ dictionary on macOS, and logind's `LockedHint` (then the ScreenSaver service's
 within about that long. The timeout is read when Serein connects and saved to
 the account when changed here; edits from another device apply on the next
 connect. Serein also shows your own status as Idle while it applies. macOS and
-Linux behavior is unverified on a live session.
+Linux behavior is unverified on a live session. A setting change invalidates an
+in-flight idle sample; its result is discarded before another query starts.
+The poller retains one blocking query at a time. A stalled Linux bus handshake,
+Wayland roundtrip or X11 query can stop idle detection without accumulating
+workers; the setting can still clear AFK. Wayland currently observes one seat,
+so activity on other seats in a multi-seat session is not included.
 
 ## Window transparency and blur
 
