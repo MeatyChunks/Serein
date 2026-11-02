@@ -155,6 +155,7 @@ impl MessagingUi {
 				.with_title(title)
 				.with_inner_size([640.0, 390.0])
 				.with_min_inner_size([320.0, 200.0])
+				.with_decorations(false)
 				.with_window_level(level),
 			|ui, class| {
 				if class == egui::ViewportClass::EmbeddedWindow {
@@ -164,6 +165,18 @@ impl MessagingUi {
 					.frame(egui::Frame::NONE.fill(egui::Color32::BLACK))
 					.show(ui, |ui| {
 						let rect = ui.max_rect();
+						let bg_response = ui.interact(
+							rect,
+							ui.scope_id().with("popout-drag-and-context"),
+							egui::Sense::click_and_drag(),
+						);
+						if bg_response.drag_started() {
+							ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+						}
+						egui::Popup::context_menu(&bg_response)
+							.close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+							.show(|ui| self.stream_audio_controls(ui));
+
 						match &self.voice_stream_view {
 							Some(texture) => {
 								let content = fit_rect(rect, texture.size);
@@ -285,10 +298,8 @@ impl MessagingUi {
 		let screen = ctx.content_rect();
 		let pip_size = egui::vec2(280.0, 158.0);
 		let pip_margin = egui::vec2(18.0, 18.0);
-		let pip_rect = egui::Rect::from_min_size(
-			screen.right_bottom() - pip_size - pip_margin,
-			pip_size,
-		);
+		let pip_rect =
+			egui::Rect::from_min_size(screen.right_bottom() - pip_size - pip_margin, pip_size);
 
 		egui::Area::new(egui::Id::unique("voice-stream-pip"))
 			.order(egui::Order::Foreground)
@@ -313,7 +324,8 @@ impl MessagingUi {
 						egui::Image::from_texture((texture.id, content.size())).corner_radius(8),
 					);
 				} else {
-					let spinner = egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(20.0));
+					let spinner =
+						egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(20.0));
 					ui.put(spinner, egui::Spinner::new().color(STAGE_MUTED));
 				}
 
@@ -322,10 +334,8 @@ impl MessagingUi {
 				// Quick overlay controls on hover: Return to call, Popout, Stop watching
 				let hovered = response.hovered() || ui.rect_contains_pointer(rect);
 				if hovered {
-					let top_bar = egui::Rect::from_min_size(
-						rect.left_top(),
-						egui::vec2(rect.width(), 36.0),
-					);
+					let top_bar =
+						egui::Rect::from_min_size(rect.left_top(), egui::vec2(rect.width(), 36.0));
 					let mut bar_ui = ui.new_child(
 						egui::UiBuilder::new()
 							.max_rect(top_bar)
@@ -3429,10 +3439,15 @@ impl MessagingUi {
 		// share/more) before anything overlaps; mute, camera and hang-up always stay.
 		let actions = 2.0 * 48.0;
 		let essential = 2.0 * 48.0 + BAR_GAP + HANG_UP;
-		let side = [watched.is_some(), watched.is_some(), focused, screen_focused]
-			.iter()
-			.filter(|shown| **shown)
-			.count() as f32
+		let side = [
+			watched.is_some(),
+			watched.is_some(),
+			focused,
+			screen_focused,
+		]
+		.iter()
+		.filter(|shown| **shown)
+		.count() as f32
 			* 44.0;
 		let side_shown = bar.width() - 2.0 * STAGE_MARGIN >= essential + BAR_GAP + side;
 		let side = if side_shown { side } else { 0.0 };
