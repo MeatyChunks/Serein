@@ -502,14 +502,15 @@ impl Menu {
 			};
 			return;
 		};
-		if kind == Kind::Game
-			&& self.kind == Some(kind)
+		if self.kind == Some(kind)
 			&& self.channel == Some(channel)
 			&& self.generation == state.generation
 			&& self.range == range
 			&& self.query == query
-			&& self.catalog_revision == state.game_mentions.revision
-			&& self.game_status == state.game_mentions.status
+			&& matches!(kind, Kind::Game | Kind::User)
+			&& (kind != Kind::Game
+				|| (self.catalog_revision == state.game_mentions.revision
+					&& self.game_status == state.game_mentions.status))
 		{
 			return;
 		}
