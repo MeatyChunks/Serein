@@ -3383,7 +3383,8 @@ impl MessagingUi {
 		let mention_enabled = keyboard_enabled
 			&& !self.ime_active
 			&& !ime_this_frame
-			&& ctx.memory(|m| m.has_focus(composer_id));
+			&& (ctx.memory(|m| m.has_focus(composer_id) || m.had_focus_last_frame(composer_id))
+				|| suggestion_pointer);
 		self.slash_commands.refresh(
 			state,
 			channel,
@@ -3851,6 +3852,7 @@ impl MessagingUi {
                         }
                         if mention_changed || (mention_enabled && suggestion_pointer) {
                             output.response.request_focus();
+                            ctx.memory_mut(|m| m.request_focus(composer_id));
                         }
                         let mention_cursor = output
                             .cursor_range
@@ -3871,6 +3873,7 @@ impl MessagingUi {
                                 )));
                             output.state.clone().store(ctx, composer_id);
                             output.response.request_focus();
+                            ctx.memory_mut(|m| m.request_focus(composer_id));
                             mention_changed = true;
                         }
                         #[cfg(not(feature = "demo"))]
@@ -3885,6 +3888,7 @@ impl MessagingUi {
                             output.state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(cursor))));
                             output.state.clone().store(ctx, composer_id);
                             output.response.request_focus();
+                            ctx.memory_mut(|m| m.request_focus(composer_id));
                             mention_changed = true;
                         }
                         // egui moves focus on unclaimed Tab before any menu can consume it.
