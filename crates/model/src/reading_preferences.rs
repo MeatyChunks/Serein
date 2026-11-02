@@ -17,6 +17,7 @@ pub struct ReadingPreferences {
 	pub scroll_speed_percent: u16,
 	pub hide_media_links: bool,
 	pub confirm_external_links: bool,
+	pub highlight_hovered_messages: bool,
 }
 impl Default for ReadingPreferences {
 	fn default() -> Self {
@@ -33,6 +34,7 @@ impl Default for ReadingPreferences {
 			scroll_speed_percent: 100,
 			hide_media_links: true,
 			confirm_external_links: true,
+			highlight_hovered_messages: true,
 		}
 	}
 }
@@ -80,6 +82,7 @@ mod tests {
 						scroll_speed_percent: 100,
 						hide_media_links: true,
 						confirm_external_links: true,
+						highlight_hovered_messages: true,
 					};
 					assert_eq!(
 						preferences.is_valid(),
