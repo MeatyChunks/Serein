@@ -1445,7 +1445,7 @@ impl Picker {
 									.layout(egui::Layout::top_down(egui::Align::Min)),
 								|ui| {
 									ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
-									if self.reaction.is_some() && self.query.is_empty() {
+									if self.query.is_empty() {
 										ui.label(
 											crate::design::semibold(
 												ui,
