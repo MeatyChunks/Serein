@@ -5146,6 +5146,8 @@ impl MessagingUi {
 						self.timeline.extension_actions = self.extensions.message_actions();
 						self.timeline.quick_reactions =
 							Some(self.reaction_picker.quick_reactions());
+						self.timeline.menu_quick_reactions =
+							Some(self.reaction_picker.menu_quick_reactions());
 						let mut seen = std::collections::BTreeSet::new();
 						let author_lookup: Vec<_> = state
 							.timeline

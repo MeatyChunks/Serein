@@ -95,6 +95,8 @@ pub struct TimelineView {
 	pub(super) reaction_users: Option<(Id, model::ReactionEmoji, bool)>,
 	/// Hover-bar reactions, most used first; `None` uses the defaults.
 	pub(super) quick_reactions: Option<[&'static str; 3]>,
+	/// Context-menu top reactions, most used first; `None` uses the defaults.
+	pub(super) menu_quick_reactions: Option<[&'static str; 4]>,
 	/// Explicit preset for the double-click gesture; `None` disables it.
 	pub(super) double_click_reaction: Option<&'static str>,
 	/// A quick reaction the reader added this frame, for the usage ranking.
@@ -1401,14 +1403,65 @@ fn message_actions(
 		model::ReactionEmoji,
 		&mut Option<(Id, model::ReactionEmoji, bool)>,
 	)>,
+	quick_reactions: (
+		Option<[&'static str; 4]>,
+		&mut Option<(Id, Option<model::ReactionEmoji>)>,
+		&mut Option<&'static str>,
+		Option<&mut Option<(Id, egui::Rect, egui::Id)>>,
+		Option<&State>,
+	),
 ) {
 	let (mark_read, mark_unread, reply) = selection;
 	let (editing, edit_started) = editing;
 	let (own, can_reply, can_edit, can_delete) = actions;
 	let (can_pin, pinned, pin_request) = pin;
 	let (can_thread, thread_request) = thread;
+	let (menu_reactions, reaction_slot, reaction_used_slot, reaction_picker_slot, reaction_state) =
+		quick_reactions;
 	popup.show(|ui| {
 		ui.set_min_width(160.0);
+		if let Some(state) = reaction_state
+			&& state.can_react(message.id, None, true)
+		{
+			let quick = menu_reactions.unwrap_or(crate::reactions::MENU_QUICK_DEFAULTS);
+			let mut reacted_any = false;
+			ui.horizontal(|ui| {
+				ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
+				for (index, text) in quick.into_iter().enumerate() {
+					let (emoji, reacted, enabled) = quick_reaction(state, message, text);
+					let response = ui
+						.push_id(("context-quick-reaction", index), |ui| {
+							ui.add_enabled_ui(enabled, |ui| {
+								crate::reactions::quick_button_sized(
+									ui, text, reacted, 32.0, 20.0, 22.0,
+								)
+							})
+							.inner
+						})
+						.inner;
+					if response.clicked() {
+						*reaction_slot = Some((message.id, Some(emoji)));
+						if !reacted {
+							*reaction_used_slot = Some(text);
+						}
+						reacted_any = true;
+					}
+				}
+				if let Some(picker) = reaction_picker_slot
+					&& let Some((anchor, trigger)) = crate::reactions::add_button(
+						ui,
+						state.can_react(message.id, None, true),
+						state.reactions.busy(),
+					) {
+					*picker = Some((message.id, anchor, trigger));
+					reacted_any = true;
+				}
+			});
+			if reacted_any {
+				ui.close();
+			}
+			ui.separator();
+		}
 		if !extension_actions.is_empty() {
 			ui.menu_button(
 				crate::i18n::translate("timeline-message-actions-extensions"),
@@ -2118,6 +2171,7 @@ impl TimelineView {
 			*self = Self {
 				extension_actions: self.extension_actions.clone(),
 				quick_reactions: self.quick_reactions,
+				menu_quick_reactions: self.menu_quick_reactions,
 				double_click_reaction: self.double_click_reaction,
 				compact_messages: self.compact_messages,
 				hide_media_links: self.hide_media_links,
@@ -4259,6 +4313,13 @@ impl TimelineView {
 									.map(|reaction| {
 										(reaction.emoji.clone(), &mut self.reaction_users)
 									}),
+								(
+									self.menu_quick_reactions,
+									&mut self.reaction,
+									&mut self.quick_reaction_used,
+									Some(&mut self.reaction_picker),
+									Some(state),
+								),
 							);
 							self.toolbar = Some((id, toolbar_rect));
 						}
@@ -5864,6 +5925,7 @@ mod tests {
 							(own, &mut thread_request),
 							(false, &mut None),
 							None,
+							(None, &mut None, &mut None, None, None),
 						)
 					},
 				);
