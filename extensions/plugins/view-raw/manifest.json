@@ -1,0 +1,39 @@
+{
+  "api_version": 1,
+  "id": "view-raw",
+  "name": "View Raw",
+  "version": "1.0.0",
+  "author": "Serein contributors",
+  "license": "MIT OR Apache-2.0",
+  "source": "https://github.com/ViceVerse-cz/Serein",
+  "kind": "plugin",
+  "capabilities": [
+    "selected_message",
+    "timeline",
+    "message_details",
+    "message_content",
+    "clipboard_write"
+  ],
+  "actions": [
+    {
+      "id": "view-raw",
+      "label": "View Raw",
+      "surface": "message"
+    },
+    {
+      "id": "inspect",
+      "label": "Inspect message",
+      "surface": "panel"
+    },
+    {
+      "id": "copy-json",
+      "label": "Copy Message Data",
+      "surface": "panel"
+    },
+    {
+      "id": "copy-content",
+      "label": "Copy Raw Content",
+      "surface": "panel"
+    }
+  ]
+}
