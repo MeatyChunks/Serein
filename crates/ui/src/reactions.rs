@@ -285,11 +285,26 @@ pub fn add_button(
 
 /// Hover-bar reactions before the reader has used any emoji this session.
 pub const QUICK_DEFAULTS: [&str; 3] = ["👍", "❤️", "😂"];
+/// Top reactions for the message context menu before the reader has used any emoji this session.
+pub const MENU_QUICK_DEFAULTS: [&str; 4] = ["👍", "❤️", "😂", "🎉"];
 
 /// One quick reaction in the message hover bar, sized like its icon buttons.
 pub fn quick_button(ui: &mut egui::Ui, emoji: &str, reacted: bool) -> egui::Response {
+	quick_button_sized(ui, emoji, reacted, 28.0, 18.0, 20.0)
+}
+
+/// One quick reaction button with custom box size and emoji icon size.
+pub fn quick_button_sized(
+	ui: &mut egui::Ui,
+	emoji: &str,
+	reacted: bool,
+	box_size: f32,
+	normal_size: f32,
+	hover_size: f32,
+) -> egui::Response {
 	let colors = crate::design::palette(ui);
-	let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(28.0), egui::Sense::click());
+	let (rect, response) =
+		ui.allocate_exact_size(egui::Vec2::splat(box_size), egui::Sense::click());
 	if reacted || response.hovered() || response.has_focus() {
 		ui.painter().rect_filled(
 			rect,
@@ -302,9 +317,9 @@ pub fn quick_button(ui: &mut egui::Ui, emoji: &str, reacted: bool) -> egui::Resp
 		);
 	}
 	let size = if response.hovered() && ui.is_enabled() {
-		20.0
+		hover_size
 	} else {
-		18.0
+		normal_size
 	};
 	let target = egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(size));
 	let tint = if ui.is_enabled() {
@@ -319,7 +334,7 @@ pub fn quick_button(ui: &mut egui::Ui, emoji: &str, reacted: bool) -> egui::Resp
 			rect.center(),
 			egui::Align2::CENTER_CENTER,
 			emoji,
-			egui::FontId::proportional(16.0),
+			egui::FontId::proportional(normal_size * 0.9),
 			colors.text_strong.gamma_multiply(tint.a() as f32 / 255.0),
 		);
 	}

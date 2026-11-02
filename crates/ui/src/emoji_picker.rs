@@ -780,6 +780,26 @@ impl Picker {
 		quick
 	}
 
+	/// Top 4 most used Unicode emoji first, filled with context menu defaults.
+	pub(crate) fn menu_quick_reactions(&self) -> [&'static str; 4] {
+		let mut quick = crate::reactions::MENU_QUICK_DEFAULTS;
+		let mut filled = 0;
+		for text in self.frequent.iter().take(4).map(|(i, _)| standard()[*i].0) {
+			quick[filled] = text;
+			filled += 1;
+		}
+		for text in crate::reactions::MENU_QUICK_DEFAULTS {
+			if filled == 4 {
+				break;
+			}
+			if !quick[..filled].contains(&text) {
+				quick[filled] = text;
+				filled += 1;
+			}
+		}
+		quick
+	}
+
 	fn favorites(&self) -> Vec<usize> {
 		let mut favorites: Vec<_> = self.frequent.iter().take(8).map(|(i, _)| *i).collect();
 		for text in ["👍", "❤️", "😂", "🎉", "👀", "✅", "🙏", "😢"] {
